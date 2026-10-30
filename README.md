@@ -115,7 +115,7 @@ Based on Dash ESC 2.5 from [vedderb/vesc_pkg](https://github.com/vedderb/vesc_pk
 - Switched VBUS (AUX 2) kept on to power the light box.
 - TX → headlight + tail: follows the Dash lights button.
 - Automatic lights from an LDR on ADC3 (1.0 V on / 1.5 V off, 5 s delay) are written but commented out, as no sensor is fitted.
-- RX → brake light: 3.3 V while ADC2 shows the brake pulled (test version, steady).
+- RX → rear/brake command, like the original controller: flashes 0/3.3 V (0.1 s) while the brake is pulled, otherwise steady 3.3 V with lights on. A steady 3.3 V while braking did not trigger the brake light.
 - AUX 1 (switched 12 V) still follows the Dash lights button.
 
 Untested on hardware. If the LDR is fitted later, uncomment the marked parts and calibrate the thresholds with `(get-adc 2)` in the REPL.

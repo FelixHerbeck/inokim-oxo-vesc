@@ -950,7 +950,7 @@
         ; Box pin 1 (red, 60 V) <- Switched VBUS V+ (AUX 2)
         ; Box pin 4 (green, headlight cmd, 3.3 V) <- STM32 AUX pin 5 (TX)
         ; Box pin 3 (yellow, rear/brake cmd, 3.3 V) <- STM32 AUX pin 6 (RX)
-        ; Brake light (RX) on whenever the ADC2 brake is pulled, lights on or off.
+        ; Brake light (RX) flashes whenever the ADC2 brake is pulled, lights on or off.
         (set-aux 2 1)
         (gpio-configure 'pin-tx 'pin-mode-out)
         (gpio-configure 'pin-rx 'pin-mode-out)
@@ -977,12 +977,22 @@
                 ;    (if (or (= light-on 1)
                 ;            (and (= auto-light-enabled 1) (= auto-dark 1)))
                 ;        1 0))
-                ; Test: steady 3.3 V while braking, 0 V otherwise
+                ; Rear/brake command, same as the original Inokim controller:
+                ; braking -> flash 0/3.3 V (lights on or off),
+                ; otherwise -> steady 3.3 V with lights on, 0 V with lights off.
+                ; (A steady 3.3 V while braking did not trigger the brake light.)
                 (if (> (get-adc 1) brake-light-threshold)
-                    (gpio-write 'pin-rx 1)
-                    (gpio-write 'pin-rx 0)
+                    {
+                        (gpio-write 'pin-rx 1)
+                        (sleep brake-flash-period)
+                        (gpio-write 'pin-rx 0)
+                        (sleep brake-flash-period)
+                    }
+                    {
+                        (gpio-write 'pin-rx (if (= light-on 1) 1 0))
+                        (sleep 0.05)
+                    }
                 )
-                (sleep 0.05)
         })
 
         (start-code-server)
