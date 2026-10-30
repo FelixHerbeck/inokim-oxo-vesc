@@ -5,7 +5,7 @@
 
 ; Inokim OX light box settings
 (def brake-light-threshold 1.0) ; ADC2 volts above which the brake counts as pulled
-(def brake-flash 0)             ; 0 = steady 3.3 V while braking, 1 = flash (change live with setq)
+(def brake-flash 1)             ; 1 = flash while braking (like the original controller), 0 = steady (change live with setq)
 (def brake-flash-period 0.1)    ; seconds on / seconds off while braking, if brake-flash = 1
 
 ; Automatic lights: DISABLED for now (no light sensor fitted).
@@ -979,8 +979,8 @@
                 ;            (and (= auto-light-enabled 1) (= auto-dark 1)))
                 ;        1 0))
                 ; Rear/brake command:
-                ; braking -> steady 3.3 V (brake-flash = 0) or flashing 0/3.3 V
-                ;            (brake-flash = 1, like the original controller),
+                ; braking -> flashing 0/3.3 V (brake-flash = 1, default, like the
+                ;            original controller) or steady 3.3 V (brake-flash = 0),
                 ; otherwise -> steady 3.3 V with lights on, 0 V with lights off.
                 (if (> (get-adc 1) brake-light-threshold)
                     (if (= brake-flash 1)
