@@ -12,7 +12,7 @@ Configs, LispBM script and wiring diagrams for converting an Inokim OXO scooter 
 | Battery | Orcell 60 V 16S, 27.5 Ah, BMS ~100–110 A continuous |
 | Tyres | 10×3.0, effective diameter 250 mm |
 | Display | VESC Dash 35B (CAN), package Dash35B + Dash ESC on the controller |
-| Lights | Inokim light module LX1-60A (60 V DC converter + LED control) |
+| Lights | Inokim light module LX1-60A (60 V DC converter + LED control); extra 12 V aux front light |
 | Inputs | 3-wire hall throttle (ADC1), normally-open brake switch (ADC2); LDR light sensor on ADC3 planned, not fitted |
 | GPS | u-blox type module on the ESP32 GPS port, logged by LogUI |
 
@@ -43,6 +43,7 @@ See `diagrams/duet_complete_wiring.jpg`.
 | | 7 ADC2 | Brake switch wire 2 |
 | | 8 ADC3 | Free (LDR leg 2, planned) |
 | Switched VBUS (AUX 2) | 2 V+ / 1 GND | Light box pin 1 red (60 V in) / pin 2 black |
+| Switched +12V (AUX 1) | 2 +12V / 1 GND | Aux front light (follows the Dash lights button, max 0.72 A) |
 | CAN (JST PH 4) | GND, CANL, CANH, +5V | Dash 35B |
 | ESP32 GPS (JST PH 4) | 1 GND, 2 RX2, 3 TX2, 4 +5V | GPS GND, TX, RX, VCC |
 
@@ -116,13 +117,17 @@ Based on Dash ESC 2.5 from [vedderb/vesc_pkg](https://github.com/vedderb/vesc_pk
 - TX → headlight + tail: follows the Dash lights button.
 - Automatic lights from an LDR on ADC3 (1.0 V on / 1.5 V off, 5 s delay) are written but commented out, as no sensor is fitted.
 - RX → rear/brake command: 3.3 V while the brake is pulled (flashing like the original controller by default, or steady with `brake-flash` = 0), otherwise steady 3.3 V with lights on. The brake light has not lit in tests yet with either signal; the rear light itself is suspected.
-- AUX 1 (switched 12 V) still follows the Dash lights button.
+- AUX 1 (switched 12 V) follows the Dash lights button and powers the aux front light.
 
 Untested on hardware. If the LDR is fitted later, uncomment the marked parts and calibrate the thresholds with `(get-adc 2)` in the REPL.
+
+## Status
+
+Working: both motors, throttle, regen brake, drive modes (Dash ESC), cruise control, headlight + tail light, aux front light, GPS logging.
 
 ## Known issues / to do
 
 - Field weakening causes the rear motor to keep driving after the throttle is released (wheels in the air). Kept off.
 - Front motor round-connector pinout not yet documented.
-- Rear light pin 2 behaviour while braking not yet measured.
+- Brake light does not light up, with either a flashing or a steady signal on the light box yellow input. It most likely did not work with the original controller either, so the rear light itself (or its wiring) is suspected. Next test: 1 kΩ from rear pin 2 to pin 4 (6 V), then to pin 3 (GND).
 - Optional: wheelie control (IMU, relative pitch) and regen ABS as LispBM additions.
