@@ -7,16 +7,19 @@
 (def brake-light-threshold 1.0) ; ADC2 volts above which the brake counts as pulled
 (def brake-flash-period 0.1)    ; seconds on / seconds off while braking
 
-; Automatic lights: LDR between AUX +5V (pin 1) and ADC3 (pin 8).
+; Automatic lights: DISABLED for now (no light sensor fitted).
+; To enable later: uncomment these defs, the "AutoLight" thread and the
+; auto-light condition in the "Lights" thread.
+; LDR between AUX +5V (pin 1) and ADC3 (pin 8).
 ; The Duet's internal 10k pulldown completes the divider: dark = low voltage.
 ; Calibrate: read (get-adc 2) at dusk and set the thresholds around that value.
-(def auto-light-enabled 1)
-(def auto-light-on-v 1.0)       ; below this for auto-light-delay -> lights on
-(def auto-light-off-v 1.5)      ; above this for auto-light-delay -> lights off
-(def auto-light-delay 5.0)      ; seconds, avoids switching under bridges/trees
-(def auto-dark 0)
-(def dark-time 0.0)
-(def bright-time 0.0)
+;(def auto-light-enabled 1)
+;(def auto-light-on-v 1.0)       ; below this for auto-light-delay -> lights on
+;(def auto-light-off-v 1.5)      ; above this for auto-light-delay -> lights off
+;(def auto-light-delay 5.0)      ; seconds, avoids switching under bridges/trees
+;(def auto-dark 0)
+;(def dark-time 0.0)
+;(def bright-time 0.0)
 (def drive-mode 1)
 (def val-brk 0.0)
 (def volts-brk 0.0)
@@ -947,30 +950,33 @@
         ; Box pin 1 (red, 60 V) <- Switched VBUS V+ (AUX 2)
         ; Box pin 4 (green, headlight cmd, 3.3 V) <- STM32 AUX pin 5 (TX)
         ; Box pin 3 (yellow, rear/brake cmd, 3.3 V) <- STM32 AUX pin 6 (RX)
-        ; Brake light flashes whenever the ADC2 brake is pulled, lights on or off.
+        ; Brake light (RX) on whenever the ADC2 brake is pulled, lights on or off.
         (set-aux 2 1)
         (gpio-configure 'pin-tx 'pin-mode-out)
         (gpio-configure 'pin-rx 'pin-mode-out)
 
-        (loopwhile-thd ("AutoLight" 100) t {
-                (var v (get-adc 2))
-                (if (< v auto-light-on-v)
-                    (setq dark-time (+ dark-time 0.5))
-                    (setq dark-time 0.0))
-                (if (> v auto-light-off-v)
-                    (setq bright-time (+ bright-time 0.5))
-                    (setq bright-time 0.0))
-                (if (> dark-time auto-light-delay) (setq auto-dark 1))
-                (if (> bright-time auto-light-delay) (setq auto-dark 0))
-                (sleep 0.5)
-        })
+        ; Automatic lights thread: DISABLED (no light sensor fitted)
+        ;(loopwhile-thd ("AutoLight" 100) t {
+        ;        (var v (get-adc 2))
+        ;        (if (< v auto-light-on-v)
+        ;            (setq dark-time (+ dark-time 0.5))
+        ;            (setq dark-time 0.0))
+        ;        (if (> v auto-light-off-v)
+        ;            (setq bright-time (+ bright-time 0.5))
+        ;            (setq bright-time 0.0))
+        ;        (if (> dark-time auto-light-delay) (setq auto-dark 1))
+        ;        (if (> bright-time auto-light-delay) (setq auto-dark 0))
+        ;        (sleep 0.5)
+        ;})
 
         (loopwhile-thd ("Lights" 100) t {
-                ; Headlight + tail: Dash button forces on, otherwise follow the light sensor
-                (gpio-write 'pin-tx
-                    (if (or (= light-on 1)
-                            (and (= auto-light-enabled 1) (= auto-dark 1)))
-                        1 0))
+                ; Headlight + tail: follow the Dash lights button
+                (gpio-write 'pin-tx (if (= light-on 1) 1 0))
+                ; With light sensor (disabled): Dash button OR dark
+                ;(gpio-write 'pin-tx
+                ;    (if (or (= light-on 1)
+                ;            (and (= auto-light-enabled 1) (= auto-dark 1)))
+                ;        1 0))
                 ; Test: steady 3.3 V while braking, 0 V otherwise
                 (if (> (get-adc 1) brake-light-threshold)
                     (gpio-write 'pin-rx 1)
