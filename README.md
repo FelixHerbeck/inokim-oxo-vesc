@@ -13,7 +13,7 @@ Configs, LispBM script and wiring diagrams for converting an Inokim OXO scooter 
 | Tyres | 10×3.0, effective diameter 250 mm |
 | Display | VESC Dash 35B (CAN), package Dash35B + Dash ESC on the controller |
 | Lights | Inokim light module LX1-60A (60 V DC converter + LED control) |
-| Inputs | 3-wire hall throttle (ADC1), normally-open brake switch (ADC2), LDR light sensor (ADC3) |
+| Inputs | 3-wire hall throttle (ADC1), normally-open brake switch (ADC2); LDR light sensor on ADC3 planned, not fitted |
 | GPS | u-blox type module on the ESP32 GPS port, logged by LogUI |
 
 ## Repository layout
@@ -35,13 +35,13 @@ See `diagrams/duet_complete_wiring.jpg`.
 | M1 phases A/B/C | — | Rear motor yellow / green / blue (thick) |
 | M1 sensor (JST PH 6) | 1 GND, 2 Hall A, 3 Hall B, 4 Hall C, 5 Temp (empty), 6 +5V | Rear black, yellow, green, blue, —, red |
 | M2 phases / sensor | — | Front motor (round connector, pinout to be documented) |
-| STM32 AUX (JST PH 8) | 1 +5V | Throttle red, brake switch wire 1, LDR leg 1 |
+| STM32 AUX (JST PH 8) | 1 +5V | Throttle red, brake switch wire 1 (LDR leg 1, planned) |
 | | 3 GND | Throttle black |
 | | 4 ADC1 | Throttle signal |
 | | 5 TX (GPIO) | Light box pin 4 green (head + tail command) |
 | | 6 RX (GPIO) | Light box pin 3 yellow (brake light command) |
 | | 7 ADC2 | Brake switch wire 2 |
-| | 8 ADC3 | LDR leg 2 |
+| | 8 ADC3 | Free (LDR leg 2, planned) |
 | Switched VBUS (AUX 2) | 2 V+ / 1 GND | Light box pin 1 red (60 V in) / pin 2 black |
 | CAN (JST PH 4) | GND, CANL, CANH, +5V | Dash 35B |
 | ESP32 GPS (JST PH 4) | 1 GND, 2 RX2, 3 TX2, 4 +5V | GPS GND, TX, RX, VCC |
@@ -113,11 +113,12 @@ Notes:
 
 Based on Dash ESC 2.5 from [vedderb/vesc_pkg](https://github.com/vedderb/vesc_pkg). Additions:
 - Switched VBUS (AUX 2) kept on to power the light box.
-- TX → headlight + tail: on when the Dash lights button is on **or** the LDR reads dark (1.0 V on / 1.5 V off, 5 s delay).
+- TX → headlight + tail: follows the Dash lights button.
+- Automatic lights from an LDR on ADC3 (1.0 V on / 1.5 V off, 5 s delay) are written but commented out, as no sensor is fitted.
 - RX → brake light: 3.3 V while ADC2 shows the brake pulled (test version, steady).
 - AUX 1 (switched 12 V) still follows the Dash lights button.
 
-Untested on hardware. Calibrate the LDR thresholds with `(get-adc 2)` in the REPL.
+Untested on hardware. If the LDR is fitted later, uncomment the marked parts and calibrate the thresholds with `(get-adc 2)` in the REPL.
 
 ## Known issues / to do
 
