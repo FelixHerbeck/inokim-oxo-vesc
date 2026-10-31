@@ -21,9 +21,9 @@
     <l_max_vin>92</l_max_vin>
     <l_battery_cut_start>54.4</l_battery_cut_start>
     <l_battery_cut_end>49.6</l_battery_cut_end>
-    <l_battery_regen_cut_start>1000</l_battery_regen_cut_start>
-    <l_battery_regen_cut_end>1100</l_battery_regen_cut_end>
-    <l_slow_abs_current>1</l_slow_abs_current>
+    <l_battery_regen_cut_start>67</l_battery_regen_cut_start>
+    <l_battery_regen_cut_end>67.6</l_battery_regen_cut_end>
+    <l_slow_abs_current>0</l_slow_abs_current>
     <l_temp_fet_start>85</l_temp_fet_start>
     <l_temp_fet_end>100</l_temp_fet_end>
     <l_temp_motor_start>85</l_temp_motor_start>

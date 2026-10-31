@@ -85,6 +85,7 @@ See `diagrams/inokim_light_module_pinout.jpg`. Measured with the scooter on.
 | Battery current max / regen | 50 A / −12 A | 35 A / −6 A (total 85 A) |
 | Absolute max current | 150 A | 150 A |
 | Battery cutoff start / end | 54.4 / 49.6 V | 54.4 / 49.6 V |
+| Regen voltage cutoff start / end | 67.0 / 67.6 V | 67.0 / 67.6 V |
 | Motor temp sensor | Disabled | Disabled |
 | Temp compensation | Off | Off |
 | Field weakening | 10 A, duty start 92%, ramp 0.2 s (testing) | 0 A (off) |
@@ -112,10 +113,12 @@ App (shared, ID 48): app to use *ADC* (not ADC and UART), permanent UART off (TX
 | App | App to use | ADC and UART | ADC |
 | | Permanent UART | On | Off |
 | | Cruise control (ADC buttons) | Off | On |
+| Rear + front | Regen voltage cutoff start / end | 1000 / 1100 V (off) | 67.0 / 67.6 V (protects a full battery) |
+| | Slow ABS current limit | On (rejected by firmware) | Off |
 | Rear + front | Wheel diameter | 250 mm | 245 mm (VESC read 2% high vs GPS) |
 
 Notes:
-- *Slow ABS current limit* is forced off by the Duet firmware; it cannot be enabled with the standard firmware.
+- *Slow ABS current limit* is forced off by the Duet firmware; it cannot be enabled with the standard firmware. The configs keep it off, so loading them no longer shows the "Parameters truncated" warning.
 - `config/current/appconf_ID48.xml` is based on the controller export of 2026-10-31 (`config/original/appconf_ID48_2026-10-31_imu_calibrated.xml`) and contains the IMU calibration (rotation roll 70.4° / pitch −57.7° / yaw 150°, accel and gyro offsets). Older app files without it would erase the calibration when loaded.
 - That export showed that CAN status message 5, traction control and the brake start voltage fix had not been applied on the controller; they are set again in the current file.
 
