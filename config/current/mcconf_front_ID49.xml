@@ -187,7 +187,7 @@
     <m_batt_filter_const>45</m_batt_filter_const>
     <si_motor_poles>30</si_motor_poles>
     <si_gear_ratio>1</si_gear_ratio>
-    <si_wheel_diameter>0.25</si_wheel_diameter>
+    <si_wheel_diameter>0.245</si_wheel_diameter>
     <si_battery_type>0</si_battery_type>
     <si_battery_cells>16</si_battery_cells>
     <si_battery_ah>27.5</si_battery_ah>
