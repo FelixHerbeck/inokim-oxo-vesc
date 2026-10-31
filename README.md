@@ -10,7 +10,7 @@ Configs, LispBM script and wiring diagrams for converting an Inokim OXO scooter 
 | Rear motor (M1, CAN ID 48) | Upgraded 2500 W hub, 30 poles, hall sensors, no thermistor |
 | Front motor (M2, CAN ID 49) | Stock OXO 1500 W hub, 30 poles, hall sensors, no thermistor, direction inverted |
 | Battery | Orcell 60 V 16S, 27.5 Ah, BMS ~100–110 A continuous |
-| Tyres | 10×3.0, effective diameter 250 mm |
+| Tyres | 10×3.0, effective diameter 245 mm (GPS-corrected) |
 | Display | VESC Dash 35B (CAN), package Dash35B + Dash ESC on the controller |
 | Lights | Inokim light module LX1-60A (60 V DC converter + LED control); extra 12 V aux front light |
 | Inputs | 3-wire hall throttle (ADC1), normally-open brake switch (ADC2); LDR light sensor on ADC3 planned, not fitted |
@@ -88,7 +88,7 @@ See `diagrams/inokim_light_module_pinout.jpg`. Measured with the scooter on.
 | Motor temp sensor | Disabled | Disabled |
 | Temp compensation | Off | Off |
 | Field weakening | 10 A, duty start 92%, ramp 0.2 s (testing) | 0 A (off) |
-| Poles / gear ratio / wheel | 30 / 1 / 250 mm | 30 / 1 / 250 mm |
+| Poles / gear ratio / wheel | 30 / 1 / 245 mm | 30 / 1 / 245 mm |
 | Inverted | No | Yes |
 
 App (shared, ID 48): app to use *ADC* (not ADC and UART), permanent UART off (TX/RX are used as GPIO for the lights), control type *Current No Reverse Brake ADC2*, Multiple ESCs over CAN on, traction control on (2000 ERPM), ramp +0.30 s / −0.10 s, CAN status messages 1–5 at 50 Hz, cruise control enabled.
@@ -112,6 +112,7 @@ App (shared, ID 48): app to use *ADC* (not ADC and UART), permanent UART off (TX
 | App | App to use | ADC and UART | ADC |
 | | Permanent UART | On | Off |
 | | Cruise control (ADC buttons) | Off | On |
+| Rear + front | Wheel diameter | 250 mm | 245 mm (VESC read 2% high vs GPS) |
 
 Notes:
 - *Slow ABS current limit* is forced off by the Duet firmware; it cannot be enabled with the standard firmware.
