@@ -5,9 +5,9 @@
     <comm_mode>0</comm_mode>
     <motor_type>2</motor_type>
     <sensor_mode>0</sensor_mode>
-    <l_current_max>60</l_current_max>
+    <l_current_max>70</l_current_max>
     <l_current_min>-20</l_current_min>
-    <l_in_current_max>30</l_in_current_max>
+    <l_in_current_max>35</l_in_current_max>
     <l_in_current_min>-6</l_in_current_min>
     <l_in_current_map_start>0.9</l_in_current_map_start>
     <l_in_current_map_filter>0.002</l_in_current_map_filter>

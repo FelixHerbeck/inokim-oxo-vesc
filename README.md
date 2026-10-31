@@ -81,17 +81,17 @@ See `diagrams/inokim_light_module_pinout.jpg`. Measured with the scooter on.
 
 | Setting | Rear (ID 48) | Front (ID 49) |
 |---|---|---|
-| Motor current max / brake | 90 A / −35 A | 60 A / −20 A |
-| Battery current max / regen | 50 A / −12 A | 30 A / −6 A |
+| Motor current max / brake | 90 A / −35 A | 70 A / −20 A |
+| Battery current max / regen | 50 A / −12 A | 35 A / −6 A (total 85 A) |
 | Absolute max current | 150 A | 150 A |
 | Battery cutoff start / end | 54.4 / 49.6 V | 54.4 / 49.6 V |
 | Motor temp sensor | Disabled | Disabled |
 | Temp compensation | Off | Off |
-| Field weakening | 0 A (off) | 0 A (off) |
+| Field weakening | 10 A, duty start 92%, ramp 0.2 s (testing) | 0 A (off) |
 | Poles / gear ratio / wheel | 30 / 1 / 250 mm | 30 / 1 / 250 mm |
 | Inverted | No | Yes |
 
-App (shared, ID 48): ADC app, control type *Current No Reverse Brake ADC2*, Multiple ESCs over CAN on, traction control on (2000 ERPM), ramp +0.30 s / −0.10 s, CAN status messages 1–5 at 50 Hz, cruise control enabled.
+App (shared, ID 48): app to use *ADC* (not ADC and UART), permanent UART off (TX/RX are used as GPIO for the lights), control type *Current No Reverse Brake ADC2*, Multiple ESCs over CAN on, traction control on (2000 ERPM), ramp +0.30 s / −0.10 s, CAN status messages 1–5 at 50 Hz, cruise control enabled.
 
 ## Config changes (original → current)
 
@@ -105,6 +105,13 @@ App (shared, ID 48): ADC app, control type *Current No Reverse Brake ADC2*, Mult
 | App | CAN status messages | 1–4 | 1–5 |
 | | Traction control | Off | On, 2000 ERPM |
 | | Brake ADC2 start voltage | 0.005 V | 0.15 V |
+| **2026-10-31 (after first ride)** | | | |
+| Front | Motor current max | 60 A | 70 A |
+| | Battery current max | 30 A | 35 A |
+| Rear | Field weakening current / duty start | 0 A / 85% | 10 A / 92% |
+| App | App to use | ADC and UART | ADC |
+| | Permanent UART | On | Off |
+| | Cruise control (ADC buttons) | Off | On |
 
 Notes:
 - *Slow ABS current limit* is forced off by the Duet firmware; it cannot be enabled with the standard firmware.
@@ -127,7 +134,7 @@ Working: both motors, throttle, regen brake, drive modes (Dash ESC), cruise cont
 
 ## Known issues / to do
 
-- Field weakening causes the rear motor to keep driving after the throttle is released (wheels in the air). Kept off.
+- Field weakening: 20 A at 85% duty start made the rear motor keep driving after the throttle was released (wheels in the air). Now testing 10 A at 92%; first ride showed the rear at 95% duty and about −2 A (slight drag) at top speed. Repeat the stick test with the wheel in the air before riding.
 - Front motor round-connector pinout not yet documented.
 - Brake light does not light up, with either a flashing or a steady signal on the light box yellow input. It most likely did not work with the original controller either, so the rear light itself (or its wiring) is suspected. Next test: 1 kΩ from rear pin 2 to pin 4 (6 V), then to pin 3 (GND).
 - Optional: wheelie control (IMU, relative pitch) and regen ABS as LispBM additions.
