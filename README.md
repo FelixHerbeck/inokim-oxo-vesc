@@ -19,7 +19,7 @@ Configs, LispBM script and wiring diagrams for converting an Inokim OXO scooter 
 ## Repository layout
 
 ```
-config/original/   configs as first exported from the controller
+config/original/   configs as exported from the controller (first export, plus the 2026-10-31 app config with IMU calibration)
 config/current/    corrected configs (see "Config changes")
 lisp/              Dash ESC 2.5 script + light box / brake light / auto-light control
 diagrams/          wiring diagrams and pinouts (JPEG)
@@ -116,7 +116,8 @@ App (shared, ID 48): app to use *ADC* (not ADC and UART), permanent UART off (TX
 
 Notes:
 - *Slow ABS current limit* is forced off by the Duet firmware; it cannot be enabled with the standard firmware.
-- *Enable Cruise Control* was turned on directly on the controller after these files were made. Re-export the app config to capture it.
+- `config/current/appconf_ID48.xml` is based on the controller export of 2026-10-31 (`config/original/appconf_ID48_2026-10-31_imu_calibrated.xml`) and contains the IMU calibration (rotation roll 70.4° / pitch −57.7° / yaw 150°, accel and gyro offsets). Older app files without it would erase the calibration when loaded.
+- That export showed that CAN status message 5, traction control and the brake start voltage fix had not been applied on the controller; they are set again in the current file.
 
 ## LispBM script (`lisp/dash_esc_lights.lisp`)
 
