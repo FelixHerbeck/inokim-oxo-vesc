@@ -82,13 +82,13 @@ See `diagrams/inokim_light_module_pinout.jpg`. Measured with the scooter on.
 | Setting | Rear (ID 48) | Front (ID 49) |
 |---|---|---|
 | Motor current max / brake | 90 A / −35 A | 70 A / −20 A |
-| Battery current max / regen | 50 A / −12 A | 35 A / −6 A (total 85 A) |
+| Battery current max / regen | 50 A / −12 A | 40 A / −6 A (total 90 A) |
 | Absolute max current | 150 A | 150 A |
 | Battery cutoff start / end | 54.4 / 49.6 V | 54.4 / 49.6 V |
 | Regen voltage cutoff start / end | 67.0 / 67.6 V | 67.0 / 67.6 V |
 | Motor temp sensor | Disabled | Disabled |
 | Temp compensation | Off | Off |
-| Field weakening | 10 A, duty start 92%, ramp 0.2 s (testing) | 0 A (off) |
+| Field weakening | 15 A, duty start 92%, ramp 0.2 s (testing) | 0 A (off) |
 | Poles / gear ratio / wheel | 30 / 1 / 245 mm | 30 / 1 / 245 mm |
 | Inverted | No | Yes |
 
@@ -115,6 +115,9 @@ App (shared, ID 48): app to use *ADC* (not ADC and UART), permanent UART off (TX
 | | Cruise control (ADC buttons) | Off | On |
 | Rear + front | Regen voltage cutoff start / end | 1000 / 1100 V (off) | 67.0 / 67.6 V (protects a full battery) |
 | | Slow ABS current limit | On (rejected by firmware) | Off |
+| **2026-11-03** | | | |
+| Front | Battery current max | 35 A | 40 A (front was at its limit at top speed) |
+| Rear | Field weakening current | 10 A | 15 A |
 | Rear + front | Wheel diameter | 250 mm | 245 mm (VESC read 2% high vs GPS) |
 
 Notes:
@@ -139,7 +142,7 @@ Working: both motors, throttle, regen brake, drive modes (Dash ESC), cruise cont
 
 ## Known issues / to do
 
-- Field weakening: 20 A at 85% duty start made the rear motor keep driving after the throttle was released (wheels in the air). Now testing 10 A at 92%; first ride showed the rear at 95% duty and about −2 A (slight drag) at top speed. Repeat the stick test with the wheel in the air before riding.
+- Field weakening: 20 A at 85% duty start made the rear motor keep driving after the throttle was released (wheels in the air). 10 A at 92% (Nov 3) works: rear id −10 A and +11 to +18 A motor current at top speed instead of −2 to −4 A drag, no torque after releasing the throttle, top speed 57 km/h (GPS). Now testing 15 A, with the front battery current raised to 40 A because the front was at its 35 A limit at top speed. Repeat the stick test with the wheel in the air before riding.
 - Front motor round-connector pinout not yet documented.
 - Brake light does not light up, with either a flashing or a steady signal on the light box yellow input. It most likely did not work with the original controller either, so the rear light itself (or its wiring) is suspected. Next test: 1 kΩ from rear pin 2 to pin 4 (6 V), then to pin 3 (GND).
 - Optional: wheelie control (IMU, relative pitch) and regen ABS as LispBM additions.
