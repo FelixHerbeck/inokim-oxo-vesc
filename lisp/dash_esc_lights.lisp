@@ -21,6 +21,51 @@
 ;(def auto-dark 0)
 ;(def dark-time 0.0)
 ;(def bright-time 0.0)
+; ---- Motor winding temperature (no sensors in the hubs) ----
+; A heat model runs for both motors all the time: copper loss 1.5*R*(iq^2+id^2)
+; heats a lumped mass C (J/K) that cools to ambient through Rth (K/W).
+; Ambient = Duet FET temperature at power-on.
+; The rear winding is also measured directly by its resistance (copper +0.393 %/degC)
+; at stops: standing still, throttle released, brake held for 2 s, at most once a
+; minute. The measurement pushes 25 A through the stationary motor for ~0.3 s,
+; the mechanical brake holds the wheel. Rear only: selecting motor 2 is global
+; in LispBM and would redirect the other threads during the measurement.
+; Above therm-limit-start the drive mode current scale is reduced linearly to
+; therm-derate-min at therm-limit-end.
+; All of these can be changed live in the REPL with setq.
+(def therm-c1 1500.0)      ; rear heat capacity, J/K
+(def therm-rth1 0.8)       ; rear thermal resistance to air, K/W
+(def therm-c2 1100.0)      ; front
+(def therm-rth2 1.0)
+(def therm-iron1 0.0)      ; extra loss in W at 55 km/h (iron), scales with speed^1.5
+(def therm-iron2 0.0)
+(def therm-limit-start 100.0) ; degC winding, derating starts
+(def therm-limit-end 125.0)   ; degC winding, derating reaches therm-derate-min
+(def therm-derate-min 0.3)    ; never below this, so there is always power to get home
+(def therm-meas-enable 1)     ; 1 = measure rear resistance at stops
+(def therm-meas-correct 0)    ; 1 = reset the rear model to each measurement (enable after checking logs)
+(def therm-meas-current 25.0) ; A
+(def therm-meas-samples 2000)
+(def therm-meas-interval 60.0); s between measurements
+(def therm-throttle-idle 0.55); ADC1 volts below which the throttle counts as released
+(def therm-alpha 0.00393)
+
+(def therm-r0 0.0564)  ; rear reference resistance (eeprom 100, set by therm-cal)
+(def therm-t0 25.0)    ; temperature at therm-r0 (eeprom 101)
+(def therm-r0-2 0.0373); front, from its motor config at startup
+(def therm-t0-2 25.0)
+(def therm-amb 25.0)
+(def therm-t1 25.0)    ; rear winding, model
+(def therm-t2 25.0)    ; front winding, model
+(def therm-tmax 25.0)
+(def therm-meas-t 0.0) ; rear winding, last measurement
+(def therm-meas-r 0.0) ; Ohm, last measurement
+(def therm-meas-n 0)
+(def therm-meas-ts 0)
+(def therm-still 0.0)
+(def therm-ts 0)
+(def therm-derate 1.0)
+
 (def drive-mode 1)
 (def val-brk 0.0)
 (def volts-brk 0.0)
@@ -95,12 +140,14 @@
         ; at that rate fights anything else writing it -- motor detection above
         ; all. So write only when it is needed: the profile changed, or
         ; something has moved the scales out from under it.
-        (var profile (list i-min i-max s-min s-max))
+        ; Motor temperature derating scales the drive mode's max current
+        (var i-max-d (* i-max therm-derate))
+        (var profile (list i-min i-max-d s-min s-max))
 
         (if (and (not profile-suspend)
                  (or (not (eq profile profile-last))
                      (not (= (conf-get 'l-current-min-scale) i-min))
-                     (not (= (conf-get 'l-current-max-scale) i-max)))) {
+                     (not (= (conf-get 'l-current-max-scale) i-max-d)))) {
                 (setq profile-last profile)
 
                 (var txb (bufcreate 37))
@@ -110,7 +157,7 @@
                 (bufset-u8 txb 3 0) ; ack
                 (bufset-u8 txb 4 0) ; Divide by controllers
                 (bufset-f32 txb 5 i-min)
-                (bufset-f32 txb 9 i-max)
+                (bufset-f32 txb 9 i-max-d)
                 (bufset-f32 txb 13 s-min)
                 (bufset-f32 txb 17 s-max)
                 (bufset-f32 txb 21 (conf-get 'l-min-duty))
@@ -206,6 +253,119 @@
 })
 
 (def dual-motors (has-dual-motors))
+
+; ---- Motor winding temperature functions ----
+(defun therm-step (temp r0 t0 c rth iron iq id kmh dt) {
+        (var r (* r0 (+ 1.0 (* therm-alpha (- temp t0)))))
+        (var s (/ (abs kmh) 55.0))
+        (var p (+ (* 1.5 r (+ (* iq iq) (* id id))) (* iron s (sqrt s))))
+        (+ temp (/ (* dt (- p (/ (- temp therm-amb) rth))) c))
+})
+
+(defun therm-temp-from-r (r)
+    (+ therm-t0 (/ (- (/ r therm-r0) 1.0) therm-alpha)))
+
+(defun therm-can-measure ()
+    (and (= therm-meas-enable 1)
+         (not profile-suspend)
+         (not motor-config-bad)
+         (= cruise-on 0)
+         (< (abs (get-speed)) 0.1)
+         (< (abs (run-m2 (get-speed))) 0.1)
+         (< (get-adc 0) therm-throttle-idle)
+         (> (get-adc 1) brake-light-threshold)))
+
+; One rear resistance measurement in Ohm, -1 on failure
+(defun therm-measure-r ()
+    (conf-measure-res therm-meas-current therm-meas-samples))
+
+; REPL test, wheel in the air or brake held: (therm-test)
+(defun therm-test () {
+        (var r (therm-measure-r))
+        (print (list "R mOhm" (* r 1000.0) "winding degC" (therm-temp-from-r r) "FET degC" (get-temp-fet)))
+        r
+})
+
+; REPL calibration with a COLD motor (scooter parked for some hours), brake held
+; or wheel in the air: (therm-cal). Averages 5 measurements and stores them with
+; the FET temperature as the reference.
+(defun therm-cal () {
+        (var sum 0.0)
+        (var n 0)
+        (looprange i 0 5 {
+                (var r (therm-measure-r))
+                (if (> r 0.0) {
+                        (setq sum (+ sum r))
+                        (setq n (+ n 1))
+                })
+                (sleep 0.5)
+        })
+        (if (> n 2) {
+                (setq therm-r0 (/ sum n))
+                (setq therm-t0 (get-temp-fet))
+                (eeprom-store-f 100 therm-r0)
+                (eeprom-store-f 101 therm-t0)
+                (print (list "Calibrated R0 mOhm" (* therm-r0 1000.0) "at degC" therm-t0))
+            }
+            (print "Calibration failed"))
+})
+
+(defun therm-init () {
+        (var er (eeprom-read-f 100))
+        (var et (eeprom-read-f 101))
+        (if (and er et (> er 0.02) (< er 0.2) (> et -20.0) (< et 60.0))
+            {
+                (setq therm-r0 er)
+                (setq therm-t0 et)
+            }
+            {
+                (setq therm-r0 (conf-get 'foc-motor-r))
+                (setq therm-t0 25.0)
+            })
+        (if dual-motors (setq therm-r0-2 (run-m2 (conf-get 'foc-motor-r))))
+        (setq therm-amb (get-temp-fet))
+        (setq therm-t1 therm-amb)
+        (setq therm-t2 therm-amb)
+        (setq therm-tmax therm-amb)
+        (setq therm-ts (systime))
+})
+
+(defun therm-loop () {
+        (var dt (secs-since therm-ts))
+        (setq therm-ts (systime))
+        (if (> dt 1.0) (setq dt 1.0))
+        (var kmh (* (get-speed) 3.6))
+
+        (setq therm-t1 (therm-step therm-t1 therm-r0 therm-t0 therm-c1 therm-rth1 therm-iron1
+                (get-iq 1) (get-id 1) kmh dt))
+        (if dual-motors
+            (setq therm-t2 (therm-step therm-t2 therm-r0-2 therm-t0-2 therm-c2 therm-rth2 therm-iron2
+                    (run-m2 (get-iq 1)) (run-m2 (get-id 1)) kmh dt)))
+        (setq therm-tmax (if (> therm-t1 therm-t2) therm-t1 therm-t2))
+
+        ; Derating in steps of 0.05, so the configuration is not rewritten constantly
+        (var d (- 1.0 (/ (* (- 1.0 therm-derate-min) (- therm-tmax therm-limit-start))
+                         (- therm-limit-end therm-limit-start))))
+        (if (> d 1.0) (setq d 1.0))
+        (if (< d therm-derate-min) (setq d therm-derate-min))
+        (setq therm-derate (/ (to-i (* d 20.0)) 20.0))
+
+        ; Resistance measurement at stops
+        (if (therm-can-measure)
+            (setq therm-still (+ therm-still dt))
+            (setq therm-still 0.0))
+        (if (and (> therm-still 2.0) (> (secs-since therm-meas-ts) therm-meas-interval)) {
+                (var r (therm-measure-r))
+                (setq therm-meas-ts (systime))
+                (setq therm-still 0.0)
+                (if (and (> r (* therm-r0 0.8)) (< r (* therm-r0 1.6))) {
+                        (setq therm-meas-r r)
+                        (setq therm-meas-t (therm-temp-from-r r))
+                        (setq therm-meas-n (+ therm-meas-n 1))
+                        (if (= therm-meas-correct 1) (setq therm-t1 therm-meas-t))
+                })
+        })
+})
 
 (defun proc-sid (id data) {
         (cond
@@ -756,6 +916,20 @@
                 ))
         })
 
+        ; Motor winding temperature: model, rear measurement, derating
+        (therm-init)
+        (setq loglist-local (append
+                loglist-local
+                '(
+                    ("Wind M1" "degC" 1                (+ therm-t1 0.0))
+                    ("Wind M2" "degC" 1                (+ therm-t2 0.0))
+                    ("Wind M1 meas" "degC" 1           (+ therm-meas-t 0.0))
+                    ("R M1 meas" "mOhm"                (* therm-meas-r 1000.0))
+                    ("R M1 est" "mOhm"                 (* (get-est-res) 1000.0))
+                    ("Therm derate"                    (+ therm-derate 0.0))
+                )
+        ))
+
         ; Restore settings if version number does not match
         ; as that probably means something else is in eeprom
         (if (not-eq (read-setting 'ver-code) settings-version) (restore-settings))
@@ -815,7 +989,7 @@
                     (bufset-i16 buf-can 0 0)
                 )
                 (bufset-i16 buf-can 2 (* (get-temp-fet) 10))
-                (bufset-i16 buf-can 4 (* (get-temp-mot) 10))
+                (bufset-i16 buf-can 4 (* therm-tmax 10)) ; no motor sensors: hottest modelled winding
                 (bufset-i16 buf-can 6 (* (ix (get-imu-rpy) 1) 100))
                 (can-send-sid 21 buf-can)
 
@@ -945,6 +1119,11 @@
                 )
 
                 (sleep 0.5)
+        })
+
+        (loopwhile-thd ("Therm" 200) t {
+                (therm-loop)
+                (sleep 0.1)
         })
 
         ; ---- Inokim OX light box ----

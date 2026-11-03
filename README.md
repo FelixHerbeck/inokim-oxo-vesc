@@ -133,6 +133,23 @@ Based on Dash ESC 2.5 from [vedderb/vesc_pkg](https://github.com/vedderb/vesc_pk
 - Automatic lights from an LDR on ADC3 (1.0 V on / 1.5 V off, 5 s delay) are written but commented out, as no sensor is fitted.
 - RX → rear/brake command: 3.3 V while the brake is pulled (flashing like the original controller by default, or steady with `brake-flash` = 0), otherwise steady 3.3 V with lights on. The brake light has not lit in tests yet with either signal; the rear light itself is suspected.
 - AUX 1 (switched 12 V) follows the Dash lights button and powers the aux front light.
+- Motor winding temperature (the hubs have no sensors, see below).
+
+### Motor winding temperature
+
+No thermistor can be routed out of either hub, so the temperature is worked out in software:
+
+- **Heat model, both motors, always running.** Copper loss 1.5·R·(iq²+id²), with R rising 0.393 %/°C, heats a lumped mass that cools to ambient (Duet FET temperature at power-on). Starting values: rear 1500 J/K and 0.8 K/W, front 1100 J/K and 1.0 K/W. Run over the 2026-11-03 climb ride (log_018) these give a rear winding of about 45 °C after the climb and 55 °C at the end of the ride, with the hub shell at about body temperature (22 °C air).
+- **Rear resistance measurement at stops.** Standing still, throttle released and brake held for 2 s (at most once a minute): 25 A through the stationary rear motor for about 0.3 s, winding temperature from the resistance rise. Rear only, because selecting motor 2 in LispBM is global and would redirect the other threads during the measurement. With `therm-meas-correct` = 1 the rear model is reset to each measurement; it is 0 until the measurements have been checked in the logs.
+- **Derating.** Above 100 °C (hottest winding) the drive mode current scale is reduced linearly, down to 30 % at 125 °C. It acts through the Dash ESC drive profile, so it needs the display connected.
+- **Display and logs.** The Dash motor temperature shows the hottest modelled winding. New log fields: `Wind M1`, `Wind M2` (model), `Wind M1 meas`, `R M1 meas` (last measurement), `R M1 est` (firmware online resistance estimate, for comparison), `Therm derate`.
+
+REPL commands, with the brake held or the wheel in the air:
+- `(therm-test)`: one rear measurement, prints resistance, winding and FET temperature.
+- `(therm-cal)`: with a **cold** motor (parked for some hours), averages 5 measurements and stores them as the reference (eeprom 100/101). Without it the motor config resistance at an assumed 25 °C is used.
+- All parameters can be changed live with `setq`, e.g. `(setq therm-meas-correct 1)`.
+
+Test plan: wheel in the air, run `(therm-test)` a few times (repeatability, should be within about 1 mOhm); next cold morning `(therm-cal)`; ride and compare `Wind M1` with `Wind M1 meas` at stops, then tune `therm-c1`/`therm-rth1` (and `therm-iron1` if the model reads low after fast riding) and enable `therm-meas-correct`.
 
 Untested on hardware. If the LDR is fitted later, uncomment the marked parts and calibrate the thresholds with `(get-adc 2)` in the REPL.
 
@@ -145,4 +162,5 @@ Working: both motors, throttle, regen brake, drive modes (Dash ESC), cruise cont
 - Field weakening: 20 A at 85% duty start made the rear motor keep driving after the throttle was released (wheels in the air). 10 A at 92% (Nov 3) works: rear id −10 A and +11 to +18 A motor current at top speed instead of −2 to −4 A drag, no torque after releasing the throttle, top speed 57 km/h (GPS). Now testing 15 A, with the front battery current raised to 40 A because the front was at its 35 A limit at top speed. Repeat the stick test with the wheel in the air before riding.
 - Front motor round-connector pinout not yet documented.
 - Brake light does not light up, with either a flashing or a steady signal on the light box yellow input. It most likely did not work with the original controller either, so the rear light itself (or its wiring) is suspected. Next test: 1 kΩ from rear pin 2 to pin 4 (6 V), then to pin 3 (GND).
+- Motor temperature model and rear resistance measurement written but untested on hardware (see "Motor winding temperature").
 - Optional: wheelie control (IMU, relative pitch) and regen ABS as LispBM additions.
