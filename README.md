@@ -189,6 +189,15 @@ Replayed over the 2026-11-04 logs it triggers once: the rear lock above. Brake o
 
 Test first with both wheels in the air: spin up, pull the brake. A free wheel stops far faster than 15 m/s², so `ABS` should go to 1 briefly. Then on a quiet, loose surface at low speed before trusting it in traffic.
 
+## Display: motorcycle-style view (`display/`)
+
+`display/dash35b-moto/` is the Dash35B 2.4 package (from vedderb/vesc_pkg) with a full-screen view in the style of a motorcycle TFT (`views/view_moto.lbm`), new fonts (Roboto Bold, Inter ExtraBold Italic for the speed) and settings in `config.lisp` (`config-moto-*`). `display/dash35b-moto.vescpkg` is the built package; `display/moto_view_renders.png` shows the view rendered by the LispBM REPL with the real drawing code.
+
+- Install: VESC Tool, connect, select the display on the CAN bus, VESC Packages → Load Custom → choose the .vescpkg → Install.
+- Rebuild without VESC Tool: `python3 build_pkg.py <package dir> <vesc_pkg>/lib_code_server/code_server.lisp dash35b-moto.vescpkg`.
+- Clock: GPS time seen by the display, or UTC from the controller on CAN id 204 (sent by `lisp/dash_esc_lights.lisp`), with UTC+2 and Israeli summer time.
+- Motor temperature shows the winding model from the controller script; with the older script it shows `--`.
+
 ## Status
 
 Working: both motors, throttle, regen brake, drive modes (Dash ESC), cruise control, headlight + tail light, aux front light, GPS logging.
@@ -202,3 +211,4 @@ Working: both motors, throttle, regen brake, drive modes (Dash ESC), cruise cont
 - Optional: wheelie control (IMU, relative pitch) as a LispBM addition.
 - Charge counting and regen ABS written but untested on hardware.
 - Parked alarm / immobiliser tried and removed (2026-11-04): the motors' handbrake did not hold the wheels. A mechanical lock is the better answer; an LTE tracker may come with the modem.
+- Motorcycle display view: rendered and checked in the LispBM REPL, not yet tested on the Dash 35B.

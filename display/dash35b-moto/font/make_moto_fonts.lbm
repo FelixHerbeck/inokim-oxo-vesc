@@ -1,0 +1,18 @@
+(def f (f-open "Roboto-Bold.ttf" "r"))
+(def roboto (load-file f))
+(f-close f)
+(def f (f-open "Inter-ExtraBoldItalic.ttf" "r"))
+(def inter (load-file f))
+(f-close f)
+
+(defun save-font (font name) {
+        (var fo (f-open name "w"))
+        (f-write fo font)
+        (f-close fo)
+        (print name)
+})
+
+(save-font (ttf-prepare roboto 90 'indexed4 "RN123") "moto-mode-90-4c.bin")
+(save-font (ttf-prepare roboto 48 'indexed4 "0123456789.-") "moto-48-4c.bin")
+(save-font (ttf-prepare roboto 32 'indexed4 "0123456789.-:%°CFkm/hMPHi") "moto-32-4c.bin")
+(save-font (ttf-prepare inter 100 'indexed4 "0123456789") "moto-speed-100-4c.bin")

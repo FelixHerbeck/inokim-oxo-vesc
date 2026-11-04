@@ -1,0 +1,379 @@
+@const-start
+
+; Full-screen view in the style of a motorcycle TFT: dark red panel on the
+; left behind a power arc, light panel with two pointed wedges, large italic
+; speed, stepped battery scale and a bottom strip with controller temperature
+; and clock. Replaces the static and page views when config-moto-view is set.
+;
+; Everything is drawn in small buffers of at most four colours, so the 25 kB
+; display memory pool is never close to full. The frame (backgrounds, wedges,
+; labels) is drawn once and again after a banner; values are redrawn only
+; when they change.
+
+(def mv-bg     0xE4E6E8) ; light panel
+(def mv-wedge  0xCCCFD3) ; wedges
+(def mv-ink    0x161618) ; text on the light panel
+(def mv-grey   0x6E7074) ; inactive badges, separators
+(def mv-maroon 0x4A0810) ; left panel
+(def mv-dim    0x6E0E1A) ; empty power arc, ticks
+(def mv-red    0xE11E2D) ; power arc, underlines, warnings
+(def mv-green  0x78DC28) ; neutral, slope marker
+(def mv-white  0xF5F5F5) ; text on the left panel
+
+; Power arc: circle whose left edge is the boundary of the dark panel
+(def mv-arc-cx 470)
+(def mv-arc-cy 175)
+(def mv-arc-r 345)
+(def mv-arc-x 85)  ; left edge of the buffer that holds the arc
+(def mv-arc-w 100)
+(def mv-arc-a0 148.0) ; bottom end of the arc, degrees (0 = right, clockwise)
+(def mv-arc-a1 213.0) ; top end
+
+; Battery scale
+(def mv-bat-x 324)  ; first segment
+(def mv-bat-base 254)
+(def mv-bat-n 8)
+(def mv-bat-pitch 14)
+(def mv-bat-w 10)
+
+(def mv-pal-ink nil)
+(def mv-pal-ink-wedge nil)
+(def mv-pal-white nil)
+(def mv-pal-green nil)
+(def mv-pal-badge-on nil)
+(def mv-pal-badge-off nil)
+(def mv-pal-warn nil)
+
+(defun mv-colors () {
+        (setq mv-pal-ink (colors-make-aa mv-bg mv-ink 4))
+        (setq mv-pal-ink-wedge (colors-make-aa mv-wedge mv-ink 4))
+        (setq mv-pal-white (colors-make-aa mv-maroon mv-white 4))
+        (setq mv-pal-green (colors-make-aa mv-maroon mv-green 4))
+        (setq mv-pal-badge-on (colors-make-aa mv-ink mv-white 4))
+        (setq mv-pal-badge-off (colors-make-aa mv-bg mv-grey 4))
+        (setq mv-pal-warn (colors-make-aa mv-bg mv-red 4))
+})
+
+; Text in a box of its own. align: 'l 'c 'r. base: baseline inside the box.
+(defun mv-text (x y w h font str align base pal) {
+        (var buf (img-buffer dm-pool 'indexed4 w h))
+        (img-clear buf)
+        (var (tw th) (ttf-text-dims font str))
+        (var px (cond
+                ((eq align 'l) 0)
+                ((eq align 'r) (- w tw))
+                (t (/ (- w tw) 2))
+        ))
+        (ttf-text buf px base '(0 1 2 3) font str)
+        (disp-render buf x y pal)
+})
+
+; Solid rectangle in one colour on top of another (lines, separators)
+(defun mv-rect (x y w h col) {
+        (var buf (img-buffer dm-pool 'indexed2 w h))
+        (img-clear buf 1)
+        (disp-render buf x y (list col col))
+})
+
+; ---- Frame ----
+
+(defun mv-frame () {
+        ; Light panel with both wedges, in strips of 20 rows
+        (var strip (img-buffer dm-pool 'indexed2 480 20))
+        (looprange i 0 16 {
+                (var y0 (* i 20))
+                (img-clear strip)
+                (img-triangle strip 250 (- 36 y0) 480 (- 36 y0) 480 (- 110 y0) 1 '(filled))
+                (img-triangle strip 250 (- 264 y0) 480 (- 190 y0) 480 (- 264 y0) 1 '(filled))
+                (disp-render strip 0 y0 (list mv-bg mv-wedge))
+        })
+        (setq strip nil)
+
+        ; Dark panel left of the arc buffer
+        (var left (img-buffer dm-pool 'indexed2 mv-arc-x 320))
+        (img-clear left)
+        (disp-render left 0 0 (list mv-maroon mv-maroon))
+        (setq left nil)
+
+        ; Left panel labels and underlines
+        (mv-text 10 8 70 18 font-16 "MODE" 'l 15 mv-pal-white)
+        (mv-rect 10 132 74 2 mv-red)
+        (mv-text 10 140 70 18 font-16 "RANGE" 'l 15 mv-pal-white)
+        (mv-text 10 210 40 18 font-16 (u-dist-str) 'l 15 mv-pal-white)
+        (mv-rect 10 236 74 2 mv-red)
+        (mv-text 10 246 40 18 font-16 "kW" 'l 15 mv-pal-white)
+
+        ; Middle column labels and underlines
+        (mv-text 179 78 72 18 font-16 "MOTOR" 'c 15 mv-pal-ink)
+        (mv-rect 182 98 66 2 mv-red)
+        (mv-rect 182 140 66 2 mv-red)
+        (mv-text 179 152 72 18 font-16 "TRIP" 'c 15 mv-pal-ink)
+        (mv-rect 182 172 66 2 mv-red)
+        (mv-rect 182 214 66 2 mv-red)
+
+        ; Speed unit
+        (mv-text 396 136 80 34 font-moto-32 (u-speed-str) 'l 28 mv-pal-ink)
+
+        ; Slope label
+        (mv-text 338 19 60 14 font-12 "SLOPE" 'c 11 mv-pal-ink)
+
+        ; Battery scale end letters, inside the lower wedge
+        (mv-text 304 248 14 14 font-16 "E" 'r 12 mv-pal-ink-wedge)
+        (mv-text 436 248 12 14 font-16 "F" 'l 12 mv-pal-ink-wedge)
+
+        ; Bottom strip: separators, thermometer, label
+        (mv-rect 262 268 218 1 mv-grey)
+        (mv-rect 372 274 1 42 mv-grey)
+        (var th (img-buffer dm-pool 'indexed2 16 36))
+        (img-clear th)
+        (img-rectangle th 4 0 7 24 1 '(rounded 3) '(thickness 2))
+        (img-circle th 7 26 7 1 '(filled))
+        (disp-render th 262 279 (list mv-bg mv-ink))
+        (mv-text 282 278 30 14 font-12 "ESC" 'l 11 mv-pal-ink)
+})
+
+; ---- Values ----
+
+(defun mv-mode-str (m)
+    (cond
+        ((= m 0) "R")
+        ((= m 1) "N")
+        ((= m 2) "1")
+        ((= m 3) "2")
+        ((= m 4) "3")
+        (t "N")
+))
+
+; Power arc and its ticks, frac 0..1 filled from the bottom
+(defun mv-draw-arc (frac) {
+        (var buf (img-buffer dm-pool 'indexed4 mv-arc-w 320))
+        (var cx (- mv-arc-cx mv-arc-x))
+        (var cy mv-arc-cy)
+        (var r mv-arc-r)
+        (var band (+ r 24))
+        (img-clear buf 0)
+
+        ; Ticks outside the band
+        (looprange i 0 11 {
+                (var a (* (+ mv-arc-a0 (* (- mv-arc-a1 mv-arc-a0) (/ i 10.0))) 0.0174533))
+                (var r1 (+ band 3))
+                (var r2 (+ band (if (= (mod i 5) 0) 12 7)))
+                (img-line buf
+                    (+ cx (* r1 (cos a))) (+ cy (* r1 (sin a)))
+                    (+ cx (* r2 (cos a))) (+ cy (* r2 (sin a)))
+                    2 '(thickness 2))
+        })
+
+        ; Band: empty colour, then the filled part, then the gap and the light panel
+        (img-circle buf cx cy band 3 '(filled))
+        (if (> frac 0.005)
+            (img-circle-sector buf cx cy band
+                mv-arc-a0 (+ mv-arc-a0 (* (- mv-arc-a1 mv-arc-a0) frac)) 2 '(filled)))
+        (img-circle buf cx cy (+ r 2) 0 '(filled))
+        (img-circle buf cx cy r 1 '(filled))
+
+        (disp-render buf mv-arc-x 0 (list mv-maroon mv-bg mv-red mv-dim))
+})
+
+(defun mv-draw-badge (x y txt on) {
+        (var buf (img-buffer dm-pool 'indexed4 75 23))
+        (img-clear buf)
+        (if (not on) (img-rectangle buf 0 0 75 23 3 '(thickness 2)))
+        (ttf-txt-center txt font-16 buf)
+        (disp-render buf x y (if on mv-pal-badge-on mv-pal-badge-off))
+})
+
+(defun mv-draw-slope (s) {
+        (var buf (img-buffer dm-pool 'indexed4 204 18))
+        (img-clear buf)
+        (img-rectangle buf 3 2 2 15 1 '(filled))
+        (img-rectangle buf 199 2 2 15 1 '(filled))
+        (img-triangle buf 55 15 63 15 59 9 1 '(filled))
+        (img-triangle buf 141 15 149 15 145 9 1 '(filled))
+        (var gx (+ 102 (* (/ (clamp s -15.0 15.0) 15.0) 86)))
+        (img-rectangle buf (- gx 6) 3 12 11 2 '(filled))
+        (disp-render buf 266 1 (list mv-bg mv-ink mv-green mv-green))
+})
+
+(defun mv-draw-battery (soc) {
+        (var bx 322)
+        (var by 220)
+        (var buf (img-buffer dm-pool 'indexed4 112 42))
+        (img-clear buf)
+        ; Wedge in buffer coordinates, so the corner above its edge stays light
+        (img-triangle buf (- 250 bx) (- 264 by) (- 480 bx) (- 190 by) (- 480 bx) (- 264 by) 1 '(filled))
+        (var lit (round (* (/ soc 100.0) mv-bat-n)))
+        (var col (if (< soc 15) 3 2))
+        (looprange i 0 mv-bat-n {
+                (var x0 (+ (- mv-bat-x bx) (* i mv-bat-pitch)))
+                (img-rectangle buf x0 (- (+ mv-bat-base 4) by) mv-bat-w 2 2 '(filled))
+                (if (< i lit) {
+                        (var h (to-i (+ 4 (* i 3.6))))
+                        (img-rectangle buf x0 (- (- mv-bat-base h) by) mv-bat-w h col '(filled))
+                })
+        })
+        (disp-render buf bx by (list mv-bg mv-wedge mv-ink mv-red))
+
+        ; Percentage, top of the digits level with the top of the tallest segment
+        (mv-text 436 222 40 16 font-16 (str-from-n soc "%d%%") 'r 14 mv-pal-ink-wedge)
+})
+
+; ---- Clock ----
+
+; Day of week, 0 = Sunday
+(defun mv-dow (y m d) {
+        (var t-off '(0 3 2 5 0 3 5 1 4 6 2 4))
+        (if (< m 3) (setq y (- y 1)))
+        (mod (+ y (/ y 4) (- (/ y 100)) (/ y 400) (ix t-off (- m 1)) d) 7)
+})
+
+; Israel summer time: from the Friday before the last Sunday of March, 02:00,
+; to the last Sunday of October, 02:00. Works on UTC.
+(defun mv-dst-israel (y m d h) {
+        (var sun-mar (- 31 (mv-dow y 3 31)))
+        (var sun-oct (- 31 (mv-dow y 10 31)))
+        (var key (+ (* (+ (* m 32) d) 24) h))
+        (and (>= key (* (+ (* 3 32) (- sun-mar 2)) 24))
+             (< key (+ (* (+ (* 10 32) (- sun-oct 1)) 24) 23)))
+})
+
+; (h m) local, or nil when no time source is available
+(defun mv-time () {
+        (var utc nil)
+
+        ; GPS time, if this display sees the GNSS data on the CAN bus. Given
+        ; up for good if the firmware has no such function.
+        (if mv-gnss-ok {
+                (var g (trap (gnss-date-time)))
+                (if (eq (first g) 'exit-ok)
+                    (if (and (list? (second g)) (> (ix (second g) 0) 2020))
+                        (setq utc (second g)))
+                    (setq mv-gnss-ok false))
+        })
+
+        ; Otherwise UTC sent by the controller on id 204
+        (if (and (not utc) date-time-rx (> (length date-time) 5))
+            (setq utc (list (+ 2000 (ix date-time 0)) (ix date-time 1) (ix date-time 2)
+                            (ix date-time 4) (ix date-time 5))))
+
+        (if utc {
+                (var (y mo d h mi) (take utc 5))
+                (var off (+ config-moto-utc-offset
+                            (if (and config-moto-dst-israel (mv-dst-israel y mo d h)) 1 0)))
+                (list (mod (+ h off 24) 24) mi)
+            }
+            nil)
+})
+
+(def mv-gnss-ok true)
+(def mv-clock "--:--")
+(def mv-clock-ts 0)
+
+; Worked out once a second, the minute cannot change faster than that
+(defun mv-clock-str () {
+        (if (> (secs-since mv-clock-ts) 1.0) {
+                (setq mv-clock-ts (systime))
+                (var tm (mv-time))
+                (setq mv-clock (if tm
+                        (str-merge (str-from-n (to-i (ix tm 0)) "%02d:") (str-from-n (to-i (ix tm 1)) "%02d"))
+                        "--:--"))
+        })
+        mv-clock
+})
+
+; ---- Thread ----
+
+(def mv-slope 0.0) ; filtered, percent
+
+(defun mv-range () {
+        (var r (if (and (> stats-km 0.1) (> stats-wh 0.5))
+                (/ (* stats-battery-ah stats-battery-soc stats-vin) (/ stats-wh stats-km))
+                -1.0))
+        (if (< r 0.0) "--" (str-from-n (to-i (u-dist r)) "%d"))
+})
+
+(defun mv-state () {
+        ; Slope from the IMU pitch (radians), low-pass filtered against bumps
+        (var s (* config-moto-slope-sign 100.0 (tan stats-angle-pitch)))
+        (setq mv-slope (+ mv-slope (* 0.15 (- s mv-slope))))
+
+        (list
+            drive-mode                                                  ; 0
+            (to-i (round (abs (u-speed stats-kmh))))                    ; 1
+            (to-i (clamp (round (* 100.0 stats-battery-soc)) 0 100))    ; 2
+            (mv-range)                                                  ; 3
+            (* (round (* stats-kw 10.0)) 0.1)                           ; 4
+            (* (round (* (clamp (/ stats-kw config-moto-kw-max) 0.0 1.0) 50.0)) 0.02) ; 5
+            cruise-control-active                                       ; 6
+            light-on                                                    ; 7
+            (to-i (round stats-temp-motor))                             ; 8
+            (* (round (* (u-dist stats-km) 10.0)) 0.1)                  ; 9
+            (to-i (round mv-slope))                                     ; 10
+            (to-i (round stats-temp-esc))                               ; 11
+            (mv-clock-str)                                              ; 12
+        )
+})
+
+(defun view-moto-thread () {
+        (mv-colors)
+        (var last nil)
+
+        (loopwhile t {
+                (var force (or view-force-static view-force-pages (not last)))
+                (setq view-force-static false)
+                (setq view-force-pages false)
+                (if force (mv-frame))
+
+                (var st (mv-state))
+                (var ch (fn (i) (or force (not-eq (ix st i) (ix last i)))))
+
+                ; Drive mode
+                (if (ch 0) {
+                        (var m (ix st 0))
+                        (mv-text 10 36 80 74 font-moto-mode (mv-mode-str m) 'l 70
+                            (if (= m 1) mv-pal-green mv-pal-white))
+                })
+
+                ; Speed, right edge at x 390, room for the italic overhang
+                (if (ch 1)
+                    (mv-text 252 86 143 84 font-moto-speed (str-from-n (ix st 1) "%d") 'r 80 mv-pal-ink))
+
+                (if (ch 2) (mv-draw-battery (ix st 2)))
+
+                (if (ch 3) (mv-text 10 166 72 38 font-moto-48 (ix st 3) 'l 36 mv-pal-white))
+
+                (if (ch 4) (mv-text 10 268 74 30 font-moto-32 (str-from-n (ix st 4) "%.1f") 'l 26 mv-pal-white))
+
+                (if (ch 5) (mv-draw-arc (ix st 5)))
+
+                (if (ch 6) (mv-draw-badge 178 12 "CRUISE" (ix st 6)))
+                (if (ch 7) (mv-draw-badge 178 40 "LIGHT" (ix st 7)))
+
+                ; Motor winding temperature, red above the motor warning setting
+                (if (ch 8) {
+                        (var t-mot (ix st 8))
+                        (mv-text 179 104 72 32 font-moto-32
+                            (if (> t-mot 0) (str-merge (str-from-n (to-i (u-temp t-mot)) "%d") "°") "--")
+                            'c 28 (if (> t-mot settings-motor-hot) mv-pal-warn mv-pal-ink))
+                })
+
+                (if (ch 9) (mv-text 179 178 72 32 font-moto-32 (str-from-n (ix st 9) "%.1f") 'c 28 mv-pal-ink))
+
+                (if (ch 10) (mv-draw-slope (ix st 10)))
+
+                ; Controller temperature, red above the controller warning setting
+                (if (ch 11) {
+                        (var t-esc (ix st 11))
+                        (mv-text 290 291 76 29 font-moto-32
+                            (str-merge (str-from-n (to-i (u-temp t-esc)) "%d") (if (eq (car settings-units-temps) 'fahrenheit) "°F" "°C"))
+                            'r 25 (if (> t-esc settings-esc-hot) mv-pal-warn mv-pal-ink))
+                })
+
+                (if (ch 12) (mv-text 378 288 98 32 font-moto-32 (ix st 12) 'r 28 mv-pal-ink))
+
+                (setq last st)
+                (sleep 0.05)
+        })
+})
+
+@const-end

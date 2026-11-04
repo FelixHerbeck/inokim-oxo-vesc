@@ -1391,6 +1391,20 @@
                 (bufset-u8 buf-can 0 cruise-on)
                 (can-send-sid 202 buf-can)
 
+                ; GPS time (UTC) for the display clock, when the controller has a fix:
+                ; year-2000, month, day, 0, hour, minute, second
+                (var gdt (gnss-date-time))
+                (if (and (list? gdt) (> (ix gdt 0) 2020)) {
+                        (bufclear buf-can)
+                        (bufset-u8 buf-can 0 (mod (ix gdt 0) 100))
+                        (bufset-u8 buf-can 1 (ix gdt 1))
+                        (bufset-u8 buf-can 2 (ix gdt 2))
+                        (bufset-u8 buf-can 4 (ix gdt 3))
+                        (bufset-u8 buf-can 5 (ix gdt 4))
+                        (bufset-u8 buf-can 6 (ix gdt 5))
+                        (can-send-sid 204 buf-can)
+                })
+
                 ; Logging state on an id of its own. 202 also carries the
                 ; wheelie settings the other way, and a display cannot tell a
                 ; controller's frame from another display's.
