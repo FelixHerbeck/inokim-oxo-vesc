@@ -474,6 +474,370 @@
         (setq therm-cooldown-on 0)
 })
 
+; ---- Battery state of charge by charge counting ----
+; The firmware's battery % comes from the pack voltage, which sags under load:
+; on 2026-11-04 it read 68 % at the top of the climb and 80 % a few minutes
+; later at rest. Counting charge instead, through both motors (the firmware
+; counters are per motor, and the log's cnt_ah is the rear only), with the
+; resting voltage only as an anchor: 100 % at 05:31, 71 % at 17:54 by counting
+; with the configured 27.5 Ah, and 71 % by resting voltage.
+; Anchors: power-on (stored value, unless the resting voltage says the pack was
+; charged or has drifted), charging while switched on, and 20 min standing.
+(def soc 1.0)              ; 0..1
+(def soc-cap-ah 27.5)      ; from si_battery_ah at startup
+(def soc-cells 16)
+(def soc-idle-a 0.08)      ; light box, Dash, controller: not seen by the motor current sensors
+(def soc-rest-anchor 1200.0) ; s standing still before blending towards the resting voltage
+(def soc-whkm 30.0)        ; long-term Wh/km for the range estimate (eeprom 103); 2026-11-04: 25 down, 36 up
+(def soc-range 0.0)        ; km
+(def soc-ocv-v '(3.40 3.50 3.60 3.65 3.70 3.75 3.80 3.85 3.90 3.95 4.00 4.05 4.10 4.15 4.20))
+(def soc-ocv-s '(0.0 4.0 10.0 15.0 22.0 30.0 39.0 48.0 56.0 64.0 71.0 78.0 85.0 92.0 100.0))
+(def soc-last-ah 0.0)
+(def soc-last-chg 0.0)
+(def soc-rest 0.0)
+(def soc-rest-done 0)
+(def soc-chg-time 0.0)
+(def soc-stored 1.0)
+(def soc-store-ts 0)
+(def soc-ts 0)
+(def soc-shut-done 0)    ; both shutdown paths call soc-shutdown; fold Wh/km in once
+
+; Resting cell voltage -> 0..1, generic NMC curve, 0 % at the 3.4 V cutoff
+(defun soc-ocv (vc)
+    (if (<= vc (ix soc-ocv-v 0)) 0.0
+        (if (>= vc (ix soc-ocv-v 14)) 1.0 {
+                (var i 0)
+                (loopwhile (> vc (ix soc-ocv-v (+ i 1))) (setq i (+ i 1)))
+                (var v0 (ix soc-ocv-v i))
+                (var v1 (ix soc-ocv-v (+ i 1)))
+                (var s0 (ix soc-ocv-s i))
+                (/ (+ s0 (* (- (ix soc-ocv-s (+ i 1)) s0) (/ (- vc v0) (- v1 v0)))) 100.0)
+        })))
+
+(defun soc-ocv-now () (soc-ocv (/ (get-vin) soc-cells)))
+
+(defun soc-ah-both () (+ (get-ah) (if dual-motors (run-m2 (get-ah)) 0.0)))
+(defun soc-chg-both () (+ (get-ah-chg) (if dual-motors (run-m2 (get-ah-chg)) 0.0)))
+(defun soc-net-wh () (+ (- (get-wh) (get-wh-chg))
+        (if dual-motors (run-m2 (- (get-wh) (get-wh-chg))) 0.0)))
+
+(defun soc-store () {
+        (eeprom-store-f 102 soc)
+        (setq soc-stored soc)
+        (setq soc-store-ts (systime))
+})
+
+(defun soc-init () {
+        (var cap (conf-get 'si-battery-ah))
+        (if (> cap 1.0) (setq soc-cap-ah cap))
+        (var cells (conf-get 'si-battery-cells))
+        (if (> cells 1) (setq soc-cells cells))
+        (var ocv (soc-ocv-now))
+        (var st (eeprom-read-f 102))
+        ; Trust the stored value unless the pack was charged since (resting
+        ; voltage more than 5 % higher) or the two disagree by more than 10 %.
+        ; Just after a ride the voltage is still recovering and reads low, which
+        ; the 10 % margin absorbs.
+        (if (and st (>= st 0.0) (<= st 1.0)
+                 (< ocv (+ st 0.05)) (> ocv (- st 0.10)))
+            (setq soc st)
+            (setq soc ocv))
+        (setq soc-stored soc)
+        (var wk (eeprom-read-f 103))
+        (if (and wk (> wk 5.0) (< wk 80.0)) (setq soc-whkm wk))
+        (setq soc-last-ah (soc-ah-both))
+        (setq soc-last-chg (soc-chg-both))
+        (setq soc-ts (systime))
+})
+
+(defun soc-loop () {
+        (var dt (secs-since soc-ts))
+        (setq soc-ts (systime))
+        (if (> dt 2.0) (setq dt 2.0))
+
+        ; Counters only grow; a smaller value means something reset them
+        (var ah (soc-ah-both))
+        (var chg (soc-chg-both))
+        (var d-ah (if (< ah soc-last-ah) 0.0 (- ah soc-last-ah)))
+        (var d-chg (if (< chg soc-last-chg) 0.0 (- chg soc-last-chg)))
+        (setq soc-last-ah ah)
+        (setq soc-last-chg chg)
+        (setq soc (- soc (/ (+ (- d-ah d-chg) (* soc-idle-a (/ dt 3600.0))) soc-cap-ah)))
+
+        ; Standing still, motors idle
+        (var still (and (< (abs (get-speed)) 0.1)
+                        (< (abs (+ (get-current-in) (if dual-motors (run-m2 (get-current-in)) 0.0))) 0.3)))
+        (if still (setq soc-rest (+ soc-rest dt)) {
+                (setq soc-rest 0.0)
+                (setq soc-rest-done 0)
+                (setq soc-chg-time 0.0)
+        })
+        (var ocv (soc-ocv-now))
+        ; Charger plugged in while switched on: voltage well above the count for 2 min
+        (if (and still (> ocv (+ soc 0.05)))
+            (setq soc-chg-time (+ soc-chg-time dt))
+            (setq soc-chg-time 0.0))
+        (if (> soc-chg-time 120.0) (setq soc ocv))
+        ; Long rest: the voltage has recovered, meet it halfway once per stop
+        (if (and (> soc-rest soc-rest-anchor) (= soc-rest-done 0)) {
+                (setq soc (* 0.5 (+ soc ocv)))
+                (setq soc-rest-done 1)
+        })
+        (if (> soc 1.0) (setq soc 1.0))
+        (if (< soc 0.0) (setq soc 0.0))
+
+        ; Store at stops (30 s still), at most every 2 min, when it moved 0.5 %
+        (if (and (> soc-rest 30.0) (> (secs-since soc-store-ts) 120.0)
+                 (> (abs (- soc soc-stored)) 0.005))
+            (soc-store))
+
+        ; Range: this ride's Wh/km blended into the long-term value by distance
+        (var km (/ (get-dist-abs) 1000.0))
+        (var whkm soc-whkm)
+        (if (> km 2.0) {
+                (var w (if (> km 10.0) 1.0 (/ km 10.0)))
+                (setq whkm (+ (* w (/ (soc-net-wh) km)) (* (- 1.0 w) soc-whkm)))
+        })
+        (if (< whkm 5.0) (setq whkm 5.0))
+        (setq soc-range (/ (* soc soc-cap-ah soc-cells 3.65) whkm))
+})
+
+; At power-off: store the charge and fold this ride's Wh/km into the long-term value
+(defun soc-shutdown () {
+        (soc-store)
+        (if (= soc-shut-done 0) {
+        (setq soc-shut-done 1)
+        (var km (/ (get-dist-abs) 1000.0))
+        (if (> km 2.0) {
+                (var wk (/ (soc-net-wh) km))
+                (if (and (> wk 5.0) (< wk 80.0))
+                    (eeprom-store-f 103 (+ (* 0.7 soc-whkm) (* 0.3 wk))))
+        })
+        })
+})
+
+; ---- Regen ABS ----
+; The brake is a switch, so the ADC app always asks for the full brake current.
+; On 2026-11-04 at 05:36 the rear wheel locked for about 0.7 s at 10-15 km/h
+; (0 rpm at -17.8 A while the front and GPS read 10 -> 6 km/h).
+; With the brake pulled, each wheel is compared with the faster one. A wheel that
+; falls behind by more than abs-slip-frac (and abs-slip-min) or decelerates
+; harder than abs-decel-max is slipping: the script takes over braking from the
+; ADC app (app-disable-output for 30 ms, renewed every 10 ms, so it lapses on its
+; own if this thread stops), drops that motor to abs-release of its brake current and
+; ramps it back once the wheel has caught up. The other wheel keeps full braking.
+; After abs-max-time it gives up and normal braking returns, so a faulty speed
+; signal cannot take a wheel's brake away for longer than that.
+; A brake-onset difference of up to 1.9 km/h appears in the 2026-11-04 logs
+; (front brakes slightly first); the thresholds sit well above it.
+(def abs-enable 1)
+(def abs-min-speed 2.2)    ; m/s (8 km/h) faster wheel, below this ABS stays out: the last
+                           ; moments of a stop show 3 vs 6 km/h without mattering
+(def abs-slip-frac 0.25)   ; wheel slower than the other by this fraction...
+(def abs-slip-min 0.8)     ; ...and at least this many m/s
+(def abs-clear-frac 0.08)  ; slip over once within this fraction
+(def abs-decel-max 15.0)   ; m/s^2 wheel deceleration that cannot be grip (~1.5 g)
+(def abs-release 0.2)      ; brake current left on a slipping wheel
+(def abs-ramp 4.0)         ; per second back to full brake current
+(def abs-max-time 1.5)     ; s
+(def abs-active 0)
+(def abs-events 0)
+(def abs-k1 1.0)
+(def abs-k2 1.0)
+(def abs-sl1 0)
+(def abs-sl2 0)
+(def abs-i1 0.0)
+(def abs-i2 0.0)
+(def abs-ts 0)
+(def abs-v1f 0.0)
+(def abs-v2f 0.0)
+(def abs-a1 0.0)
+(def abs-a2 0.0)
+
+(defun abs-wheel-slip (v vref acc was)
+    (if (< vref abs-min-speed) 0
+        (if (= was 1)
+            (if (> (- vref v) (* abs-clear-frac vref)) 1 0)
+            (if (or (< acc (- abs-decel-max))
+                    (> (- vref v) (if (> abs-slip-min (* abs-slip-frac vref))
+                                      abs-slip-min (* abs-slip-frac vref))))
+                1 0))))
+
+(defun abs-stop () {
+        (setq abs-active 0)
+        (setq abs-sl1 0)
+        (setq abs-sl2 0)
+        (setq abs-k1 1.0)
+        (setq abs-k2 1.0)
+        ; app-disable-output lapses within 30 ms and the ADC app takes over again
+})
+
+(defun abs-loop (dt) {
+        (var v1 (get-speed))
+        (var v2 (if dual-motors (run-m2 (get-speed)) v1))
+        ; Wheel deceleration, lightly filtered (hall speed is coarse at 100 Hz)
+        (var a (/ dt (+ dt 0.03)))
+        (var v1f (+ abs-v1f (* a (- v1 abs-v1f))))
+        (var v2f (+ abs-v2f (* a (- v2 abs-v2f))))
+        (setq abs-a1 (+ abs-a1 (* 0.3 (- (/ (- v1f abs-v1f) dt) abs-a1))))
+        (setq abs-a2 (+ abs-a2 (* 0.3 (- (/ (- v2f abs-v2f) dt) abs-a2))))
+        (setq abs-v1f v1f)
+        (setq abs-v2f v2f)
+
+        (var braking (and (= abs-enable 1) dual-motors (= alarm-armed 0)
+                          (> (get-adc 1) brake-light-threshold)))
+        (if (not braking)
+            (if (= abs-active 1) (abs-stop))
+            {
+                (var vref (if (> v1 v2) v1 v2))
+                (setq abs-sl1 (abs-wheel-slip v1 vref abs-a1 abs-sl1))
+                (setq abs-sl2 (abs-wheel-slip v2 vref abs-a2 abs-sl2))
+                (if (and (= abs-active 0) (or (= abs-sl1 1) (= abs-sl2 1))) {
+                        (setq abs-active 1)
+                        (setq abs-ts (systime))
+                        (setq abs-events (+ abs-events 1))
+                        ; Brake current the ADC app would be using: configured
+                        ; minimum times the drive mode's brake scale
+                        (setq abs-i1 (abs (* (conf-get 'l-current-min) (conf-get 'l-current-min-scale))))
+                        (setq abs-i2 (abs (run-m2 (* (conf-get 'l-current-min) (conf-get 'l-current-min-scale)))))
+                })
+                (if (= abs-active 1)
+                    (if (> (secs-since abs-ts) abs-max-time)
+                        (abs-stop)
+                        {
+                            (setq abs-k1 (if (= abs-sl1 1) abs-release
+                                    (if (< (+ abs-k1 (* abs-ramp dt)) 1.0) (+ abs-k1 (* abs-ramp dt)) 1.0)))
+                            (setq abs-k2 (if (= abs-sl2 1) abs-release
+                                    (if (< (+ abs-k2 (* abs-ramp dt)) 1.0) (+ abs-k2 (* abs-ramp dt)) 1.0)))
+                            (if (and (>= abs-k1 1.0) (>= abs-k2 1.0))
+                                (abs-stop)
+                                {
+                                    (app-disable-output 30)
+                                    (set-brake (* abs-i1 abs-k1))
+                                    (run-m2 (set-brake (* abs-i2 abs-k2)))
+                                })
+                        }))
+            })
+})
+
+; ---- Parked alarm ----
+; Arm and disarm: lights button 4 times within 5 s, standing still. Two short
+; beeps = armed, one long = disarmed. While armed the throttle does nothing.
+; Tilt (alarm-tilt), rotation (alarm-gyro) or either wheel turning (alarm-move)
+; sets it off for alarm-duration: lights flash, the rear motor beeps, the front
+; motor holds the wheel (handbrake current). Then it re-arms where the scooter
+; now stands. A power cycle disarms; it only guards while the scooter is on.
+; alarm-notify is the hook for the LTE modem.
+(def alarm-armed 0)
+(def alarm-active 0)
+(def alarm-events 0)
+(def alarm-tilt 0.14)        ; rad, about 8 degrees
+(def alarm-gyro 40.0)        ; deg/s
+(def alarm-move 0.3)         ; m of wheel travel
+(def alarm-duration 30.0)    ; s
+(def alarm-hold-current 12.0); A, front handbrake while sounding (about 13 W)
+(def alarm-beep-v 3.0)       ; V for the motor beep
+(def alarm-toggles nil)
+(def alarm-light-last 0)
+(def alarm-ref nil)          ; (roll pitch dist-rear dist-front)
+(def alarm-ts 0)
+(def alarm-beep-ts 0)
+(def alarm-req 0)            ; 1 = arm/disarm requested by the gesture
+(def alarm-arm-ts 0)         ; armed at, triggers ignored for 2 s (own beeps, stepping away)
+
+(defun maxf (a b) (if (> a b) a b))
+
+; Timestamps from a list that are less than 5 s old
+(defun alarm-recent (lst)
+    (if (eq lst nil) nil
+        (if (< (secs-since (first lst)) 5.0)
+            (cons (first lst) (alarm-recent (rest lst)))
+            (alarm-recent (rest lst)))))
+
+(defun alarm-beep (freq t-s)
+    (trap (foc-beep freq t-s alarm-beep-v)))
+
+(defun alarm-reference () {
+        (var rpy (get-imu-rpy))
+        (setq alarm-ref (list (ix rpy 0) (ix rpy 1)
+                (get-dist-abs) (if dual-motors (run-m2 (get-dist-abs)) 0.0)))
+})
+
+; Called from the Dash frame handler with each light-on value
+(defun alarm-gesture (l) {
+        (if (!= l alarm-light-last) {
+                (setq alarm-light-last l)
+                (var now (systime))
+                (setq alarm-toggles (alarm-recent (cons now alarm-toggles)))
+                (if (and (>= (length alarm-toggles) 4) (< (abs (get-speed)) 0.1)) {
+                        (setq alarm-toggles nil)
+                        (setq alarm-req 1)
+                })
+        })
+})
+
+(defun alarm-notify () {
+        ; LTE hook: send position and time here once the modem is fitted
+        (print "Alarm triggered")
+})
+
+(defun alarm-release () {
+        (setq alarm-active 0)
+        (set-current 0)
+        (if dual-motors (run-m2 (set-current 0)))
+})
+
+(defun alarm-loop () {
+        (if (= alarm-req 1) {
+                (setq alarm-req 0)
+                (if (= alarm-armed 0)
+                    {
+                        (setq cruise-on 0)
+                        (setq alarm-armed 1)
+                        (app-disable-output 300)
+                        (alarm-beep 2000 0.1) (sleep 0.15) (alarm-beep 2000 0.1)
+                        (sleep 0.3)
+                        (alarm-reference)
+                        (setq alarm-arm-ts (systime))
+                    }
+                    {
+                        (if (= alarm-active 1) (alarm-release))
+                        (setq alarm-armed 0)
+                        (alarm-beep 1200 0.6)
+                    })
+        })
+        (if (= alarm-armed 1) {
+                (app-disable-output 300)
+                (var rpy (get-imu-rpy))
+                (var g (get-imu-gyro))
+                (var tilt (maxf (abs (- (ix rpy 0) (ix alarm-ref 0)))
+                                (abs (- (ix rpy 1) (ix alarm-ref 1)))))
+                (var rot (maxf (abs (ix g 0)) (maxf (abs (ix g 1)) (abs (ix g 2)))))
+                (var moved (maxf (abs (- (get-dist-abs) (ix alarm-ref 2)))
+                                (if dual-motors (abs (- (run-m2 (get-dist-abs)) (ix alarm-ref 3))) 0.0)))
+                (if (and (= alarm-active 0) (> (secs-since alarm-arm-ts) 2.0)
+                         (or (> tilt alarm-tilt) (> rot alarm-gyro) (> moved alarm-move))) {
+                        (setq alarm-active 1)
+                        (setq alarm-ts (systime))
+                        (setq alarm-events (+ alarm-events 1))
+                        (alarm-notify)
+                })
+                (if (= alarm-active 1)
+                    (if (> (secs-since alarm-ts) alarm-duration)
+                        {
+                            (alarm-release)
+                            (alarm-reference)
+                        }
+                        {
+                            (if dual-motors (run-m2 (set-handbrake alarm-hold-current)))
+                            (if (> (secs-since alarm-beep-ts) 0.5) {
+                                    (setq alarm-beep-ts (systime))
+                                    (alarm-beep 2500 0.25)
+                            })
+                        }))
+        })
+})
+
 (defun proc-sid (id data) {
         (cond
             ((= id 35) {
@@ -486,6 +850,7 @@
                     (setq display-ts (systime))
                     (var drive-mode-new (bufget-u8 data 0))
                     (setq light-on (bufget-u8 data 1))
+                    (alarm-gesture light-on)
 
                     ; A second display that has not caught up yet keeps sending
                     ; the previous mode for a frame or two. Hold a new mode
@@ -606,6 +971,7 @@
                         })
 
                         ((= (bufget-u8 data 0) 1) { ; About to turn off
+                                (soc-shutdown)
                                 ; Close the log while there is still power. The
                                 ; firmware's own shutdown event does this too,
                                 ; but it does not fire when the display cuts
@@ -646,7 +1012,7 @@
     (loopwhile t
         (recv
             ((event-data-rx . (? data)) (trap (eval (read data))))
-            (event-shutdown (stop-log last-can-id))
+            (event-shutdown { (soc-shutdown) (stop-log last-can-id) })
             ((event-can-sid . ((? id) . (? data))) (trap (proc-sid id data)))
             (_ nil)
 )))
@@ -1039,6 +1405,12 @@
                     ("R M1 meas" "mOhm"                (* therm-meas-r 1000.0))
                     ("R M1 est" "mOhm"                 (* (get-est-res) 1000.0))
                     ("Therm derate"                    (+ therm-derate 0.0))
+                    ("SOC" "%" 1                       (* soc 100.0))
+                    ("Range" "km" 1                    (+ soc-range 0.0))
+                    ("ABS"                             (+ abs-active 0))
+                    ("ABS k M1"                        (+ abs-k1 0.0))
+                    ("ABS k M2"                        (+ abs-k2 0.0))
+                    ("Alarm"                           (+ alarm-armed alarm-active))
                 )
         ))
 
@@ -1089,7 +1461,7 @@
 
         (loopwhile-thd ("Send CAN" 150) t {
                 (bufclear buf-can)
-                (bufset-i16 buf-can 0 (* (get-batt) 1000))
+                (bufset-i16 buf-can 0 (* soc 1000)) ; counted charge, not the voltage-based get-batt
                 (bufset-i16 buf-can 2 (* (abs (get-duty)) 1000))
                 (bufset-i16 buf-can 4 (* (abs (get-speed)) 3.6 10))
                 (bufset-i16 buf-can 6 (* (setup-current-in) (get-vin) 0.1))
@@ -1238,6 +1610,27 @@
                 (sleep 0.1)
         })
 
+        (soc-init)
+        (loopwhile-thd ("SOC" 200) t {
+                (soc-loop)
+                (sleep 0.5)
+        })
+
+        (var abs-ts-loop (systime))
+        (loopwhile-thd ("ABS" 200) t {
+                (var dt (secs-since abs-ts-loop))
+                (setq abs-ts-loop (systime))
+                (if (> dt 0.05) (setq dt 0.05))
+                (if (< dt 0.001) (setq dt 0.001))
+                (abs-loop dt)
+                (sleep 0.01)
+        })
+
+        (loopwhile-thd ("Alarm" 200) t {
+                (alarm-loop)
+                (sleep 0.05)
+        })
+
         ; ---- Inokim OX light box ----
         ; Box pin 1 (red, 60 V) <- Switched VBUS V+ (AUX 2)
         ; Box pin 4 (green, headlight cmd, 3.3 V) <- STM32 AUX pin 5 (TX)
@@ -1262,6 +1655,14 @@
         ;})
 
         (loopwhile-thd ("Lights" 100) t {
+                ; Alarm sounding: everything flashes
+                (loopwhile (= alarm-active 1) {
+                        (gpio-write 'pin-tx 1) (gpio-write 'pin-rx 1) (set-aux 1 1)
+                        (sleep 0.25)
+                        (gpio-write 'pin-tx 0) (gpio-write 'pin-rx 0) (set-aux 1 0)
+                        (sleep 0.25)
+                })
+                (set-aux 1 (if (= light-on 1) 1 0))
                 ; Headlight + tail: follow the Dash lights button
                 (gpio-write 'pin-tx (if (= light-on 1) 1 0))
                 ; With light sensor (disabled): Dash button OR dark

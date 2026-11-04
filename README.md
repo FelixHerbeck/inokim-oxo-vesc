@@ -170,6 +170,32 @@ Tested on synthetic data built from the 2026-11-04 climb (two climbs, 50 points,
 
 Untested on hardware. If the LDR is fitted later, uncomment the marked parts and calibrate the thresholds with `(get-adc 2)` in the REPL.
 
+### Battery % by charge counting
+
+The firmware's battery % comes from the pack voltage, which sags under load: on 2026-11-04 it read 51 % at the hardest part of the climb and 79 % at rest minutes later. The script counts charge through **both** motors instead (the firmware counters `cnt_ah`/`cnt_wh` in the log are the rear motor only, about half the real use), plus 0.08 A for the light box, Dash and controller, against `si_battery_ah` (27.5 Ah). The Dash battery % now shows this value.
+
+- Anchors: at power-on the stored value is used unless the resting voltage says the pack was charged (more than 5 % higher) or the two disagree by more than 10 %; charging while switched on is followed; after 20 min standing still the count meets the resting voltage halfway.
+- Stored in eeprom 102 at stops and at power-off. Range estimate (`Range` in the log) from this ride's Wh/km blended into a long-term value (eeprom 103, starting at 30 Wh/km).
+- Replayed over the 2026-11-04 logs: 100 % → 70.6 % over the day, within 1.5 % of the resting voltage at every ride start (71.4 % at the end). Real use that day: 25 Wh/km on the descent, 36 Wh/km on the climb, both motors.
+- Tuning: `soc-idle-a`, `soc-cap-ah` (set from the motor config), and the resting-voltage curve `soc-ocv-v`/`soc-ocv-s` (generic NMC, 0 % at the 3.4 V cutoff).
+
+### Regen ABS
+
+The brake is a switch, so the ADC app always asks for the full brake current. On 2026-11-04 at 05:36 the rear wheel locked for about 0.7 s at 10–15 km/h (0 rpm at −17.8 A while the front and the GPS read 10 → 6 km/h).
+
+With the brake pulled and the faster wheel above 8 km/h, a wheel that is slower than the other by more than 25 % (and 0.8 m/s), or decelerates harder than 15 m/s², counts as slipping. The script then takes over braking from the ADC app (`app-disable-output` for 30 ms, renewed every 10 ms, so it lapses by itself if the thread stops), drops that motor to 20 % of its brake current, and ramps it back at 4× per second once the wheel has caught up; the other wheel keeps full braking. After 1.5 s it gives up and normal braking returns, so a faulty speed signal cannot take a wheel's brake away for longer.
+
+Replayed over the 2026-11-04 logs it triggers once: the rear lock above. Brake onset differences of up to 1.9 km/h (the front brakes slightly first) stay well below the thresholds. Log fields: `ABS`, `ABS k M1`, `ABS k M2` (brake fraction). Off with `(setq abs-enable 0)`.
+
+Test first with both wheels in the air: spin up, pull the brake. A free wheel stops far faster than 15 m/s², so `ABS` should go to 1 briefly. Then on a quiet, loose surface at low speed before trusting it in traffic.
+
+### Parked alarm
+
+- **Arm / disarm:** lights button 4 times within 5 s while standing still. Two short beeps = armed, one long beep = disarmed. While armed the throttle does nothing. A power cycle disarms; it guards only while the scooter is switched on.
+- **Triggers** (ignored for 2 s after arming): tilt more than about 8° (`alarm-tilt`, rad), rotation faster than 40 °/s (`alarm-gyro`), or either wheel turning more than 0.3 m (`alarm-move`).
+- **Alarm** for 30 s: all lights flash, the rear motor beeps, the front motor holds its wheel with 12 A (`alarm-hold-current`). Then it re-arms where the scooter stands.
+- `alarm-notify` is the hook for the LTE modem. Log field `Alarm`: 0 off, 1 armed, 2 sounding.
+
 ## Status
 
 Working: both motors, throttle, regen brake, drive modes (Dash ESC), cruise control, headlight + tail light, aux front light, GPS logging.
@@ -180,4 +206,5 @@ Working: both motors, throttle, regen brake, drive modes (Dash ESC), cruise cont
 - Front motor round-connector pinout not yet documented.
 - Brake light does not light up, with either a flashing or a steady signal on the light box yellow input. It most likely did not work with the original controller either, so the rear light itself (or its wiring) is suspected. Next test: 1 kΩ from rear pin 2 to pin 4 (6 V), then to pin 3 (GND).
 - Motor temperature model and rear resistance measurement written but untested on hardware (see "Motor winding temperature").
-- Optional: wheelie control (IMU, relative pitch) and regen ABS as LispBM additions.
+- Optional: wheelie control (IMU, relative pitch) as a LispBM addition.
+- Charge counting, regen ABS and parked alarm written but untested on hardware.
