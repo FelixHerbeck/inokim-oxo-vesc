@@ -22,6 +22,7 @@ Configs, LispBM script and wiring diagrams for converting an Inokim OXO scooter 
 config/original/   configs as exported from the controller (first export, plus the 2026-10-31 app config with IMU calibration)
 config/current/    corrected configs (see "Config changes")
 lisp/              Dash ESC 2.5 script + light box / brake light / auto-light control
+tools/             fit_thermal.py: fits the motor heat model to logged resistance measurements
 diagrams/          wiring diagrams and pinouts (JPEG)
 ```
 
@@ -139,17 +140,33 @@ Based on Dash ESC 2.5 from [vedderb/vesc_pkg](https://github.com/vedderb/vesc_pk
 
 No thermistor can be routed out of either hub, so the temperature is worked out in software:
 
-- **Heat model, both motors, always running.** Copper loss 1.5·R·(iq²+id²), with R rising 0.393 %/°C, heats a lumped mass that cools to ambient (Duet FET temperature at power-on). Starting values: rear 1500 J/K and 0.8 K/W, front 1100 J/K and 1.0 K/W. Run over the 2026-11-03 climb ride (log_018) these give a rear winding of about 45 °C after the climb and 55 °C at the end of the ride, with the hub shell at about body temperature (22 °C air).
+- **Heat model, both motors, always running.** Two nodes per motor: winding + stator, heated by copper loss 1.5·R·(iq²+id²) (R rising 0.393 %/°C) plus iron loss growing with speed^1.5; and shell + magnets, cooling to ambient better the faster the wheel turns. One lumped node (the first version) spreads the heat over the whole motor and lags the winding on hard bursts: 60 s at 90 A gives 51 °C with one node, 67 °C with two. Ambient is the lowest FET temperature seen since power-on (the FET reads warm right after a ride).
+  Starting constants, from the motor sizes (rear 2500 W, front 1500 W hub): rear Cw 900 J/K, Cs 1600 J/K, winding→shell 0.25 K/W, shell→air 1.0 W/K + 0.08 W/K per km/h, iron 25 W at 55 km/h; front 600 / 1100 / 0.35 / 0.8 + 0.06 / 15 W. These are estimates to be replaced by a fit (see "Calibrating the heat model").
+  The 2026-11-04 rides (logs 020–024, script not yet installed) give a modelled rear winding peak of about 48 °C on the morning descent and 59 °C on the evening climb. The climb was mild: only 11 s above 60 A on the rear.
+- **Reset after power-on.** The model starts at ambient, which is wrong after a hot ride, so the first rear resistance measurement after power-on always resets both models (front seeded at 0.7 × the rear rise above ambient). `therm-boot-correct` = 0 turns this off.
 - **Rear resistance measurement at stops.** Standing still, throttle released and brake held for 2 s (at most once a minute): 25 A through the stationary rear motor for about 0.3 s, winding temperature from the resistance rise. Rear only, because selecting motor 2 in LispBM is global and would redirect the other threads during the measurement. With `therm-meas-correct` = 1 the rear model is reset to each measurement; it is 0 until the measurements have been checked in the logs.
-- **Derating.** Above 100 °C (hottest winding) the drive mode current scale is reduced linearly, down to 30 % at 125 °C. It acts through the Dash ESC drive profile, so it needs the display connected.
-- **Display and logs.** The Dash motor temperature shows the hottest modelled winding. New log fields: `Wind M1`, `Wind M2` (model), `Wind M1 meas`, `R M1 meas` (last measurement), `R M1 est` (firmware online resistance estimate, for comparison), `Therm derate`.
+- **Derating.** Above 100 °C (hottest winding) or 80 °C (hottest shell, where the magnets are) the drive mode current scale is reduced linearly, down to 30 % at 125 °C / 100 °C; the lower factor wins. It acts through the Dash ESC drive profile, so it needs the display connected.
+- **Display and logs.** The Dash motor temperature shows the hottest modelled winding. New log fields: `Wind M1`, `Wind M2`, `Shell M1`, `Shell M2` (model), `Loss M1`, `Loss M2` (W), `Therm amb`, `Wind M1 meas`, `R M1 meas` (last measurement), `R M1 est` (firmware online resistance estimate, for comparison), `Therm derate`.
 
 REPL commands, with the brake held or the wheel in the air:
 - `(therm-test)`: one rear measurement, prints resistance, winding and FET temperature.
+- `(therm-cooldown n period)`: n rear measurements, period seconds apart, for the cooldown curve after a ride; stops if the scooter moves or the throttle is touched. The stop measurement is held off while it runs.
 - `(therm-cal)`: with a **cold** motor (parked for some hours), averages 5 measurements and stores them as the reference (eeprom 100/101). Without it the motor config resistance at an assumed 25 °C is used.
 - All parameters can be changed live with `setq`, e.g. `(setq therm-meas-correct 1)`.
 
-Test plan: wheel in the air, run `(therm-test)` a few times (repeatability, should be within about 1 mOhm); next cold morning `(therm-cal)`; ride and compare `Wind M1` with `Wind M1 meas` at stops, then tune `therm-c1`/`therm-rth1` (and `therm-iron1` if the model reads low after fast riding) and enable `therm-meas-correct`.
+### Calibrating the heat model
+
+The 10 Hz logs alone cannot calibrate it: the back-EMF does drift down about 0.8 % over a ride, which would suggest about 7 K of magnet warming, but the same drift follows the falling pack voltage and cannot be separated from it. The resistance measurements are the ground truth.
+
+1. **Install and check.** Upload the script; confirm the log has `Wind M1 meas`, `Shell M1` and `Loss M1` columns.
+2. **Repeatability.** Wheel in the air, `(therm-test)` five times. Spread should stay within about 1 mOhm (about 4 °C); if it is worse, the stop measurements cannot be trusted and the fit will not be either.
+3. **Cold reference.** After the scooter has been parked indoors for some hours: `(therm-cal)`. Note the room temperature if you have a thermometer.
+4. **Hot ride with measurements.** `(setq therm-meas-interval 20.0)` for denser points, then the hardest climb available (the evening route, or a steep hill two or three times). Stop every 2–3 minutes and hold the brake for 2 s standing still; expect a small jerk from the test current. The aim is to get the rear winding to about 90–100 °C measured; stop climbing if `Wind M1 meas` passes 110 °C.
+5. **Cooldown curve.** At the top, rear wheel off the ground (or brake held), logging still running: `(therm-cooldown 40 60.0)`. Forty minutes of points is what separates the winding from the shell.
+6. **Optional:** an IR thermometer on the hub shell (on a piece of matt tape) at a few of the same moments, to check `Shell M1`.
+7. **Fit.** `python3 tools/fit_thermal.py <logs of the day, in order> --r0 <R0 from therm-cal> --t0 <its temperature>`. It prints `setq` lines for the REPL and flags the constants the data said little about (those stay close to the starting estimates), plus a check prediction for 10 min at 60 A. Put the values in the defs, and once the model tracks the measurements within about 5 K, consider `(setq therm-meas-correct 1)`.
+
+Tested on synthetic data built from the 2026-11-04 climb (two climbs, 50 points, 2 K noise, deliberately different true constants): fitted to 1.8 K RMS; for 10 min at 60 A it predicts 146 °C against a true 140 °C (starting constants: 150 °C).
 
 Untested on hardware. If the LDR is fitted later, uncomment the marked parts and calibrate the thresholds with `(get-adc 2)` in the REPL.
 

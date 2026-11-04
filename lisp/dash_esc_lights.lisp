@@ -22,25 +22,44 @@
 ;(def dark-time 0.0)
 ;(def bright-time 0.0)
 ; ---- Motor winding temperature (no sensors in the hubs) ----
-; A heat model runs for both motors all the time: copper loss 1.5*R*(iq^2+id^2)
-; heats a lumped mass C (J/K) that cools to ambient through Rth (K/W).
-; Ambient = Duet FET temperature at power-on.
+; A two-node heat model runs for both motors all the time:
+;   winding + stator (Cw, J/K) <- copper loss 1.5*R(T)*(iq^2+id^2) + iron loss
+;   winding -> shell/magnets through Rws (K/W)
+;   shell (Cs, J/K) -> air through g0 + g1*km/h (W/K), so it cools better when moving
+; One lumped node lags the winding on hard bursts (60 s at 90 A: 51 vs 67 degC),
+; which is when the estimate matters. The constants are first estimates from the
+; motor sizes and the 2026-11-04 logs, to be fitted from resistance measurements
+; (tools/fit_thermal.py).
+; Ambient = lowest Duet FET temperature seen since power-on.
+; Power-on starts the model at ambient, which is wrong after a hot ride, so the
+; first rear resistance measurement after power-on always resets the model
+; (therm-boot-correct), whatever therm-meas-correct says.
 ; The rear winding is also measured directly by its resistance (copper +0.393 %/degC)
 ; at stops: standing still, throttle released, brake held for 2 s, at most once a
 ; minute. The measurement pushes 25 A through the stationary motor for ~0.3 s,
 ; the mechanical brake holds the wheel. Rear only: selecting motor 2 is global
 ; in LispBM and would redirect the other threads during the measurement.
-; Above therm-limit-start the drive mode current scale is reduced linearly to
-; therm-derate-min at therm-limit-end.
+; Above therm-limit-start (winding) or therm-shell-start (shell, magnets) the
+; drive mode current scale is reduced linearly to therm-derate-min at the
+; matching end temperature; the lower of the two wins.
 ; All of these can be changed live in the REPL with setq.
-(def therm-c1 1500.0)      ; rear heat capacity, J/K
-(def therm-rth1 0.8)       ; rear thermal resistance to air, K/W
-(def therm-c2 1100.0)      ; front
-(def therm-rth2 1.0)
-(def therm-iron1 0.0)      ; extra loss in W at 55 km/h (iron), scales with speed^1.5
-(def therm-iron2 0.0)
+(def therm-cw1 900.0)      ; rear winding + stator heat capacity, J/K
+(def therm-cs1 1600.0)     ; rear shell + magnets, J/K
+(def therm-rws1 0.25)      ; rear winding -> shell, K/W
+(def therm-g0-1 1.0)       ; rear shell -> air standing still, W/K
+(def therm-g1-1 0.08)      ; rear shell -> air, extra W/K per km/h
+(def therm-cw2 600.0)      ; front (stock 1500 W hub)
+(def therm-cs2 1100.0)
+(def therm-rws2 0.35)
+(def therm-g0-2 0.8)
+(def therm-g1-2 0.06)
+(def therm-iron1 25.0)     ; iron loss in W at 55 km/h, scales with speed^1.5
+(def therm-iron2 15.0)
 (def therm-limit-start 100.0) ; degC winding, derating starts
 (def therm-limit-end 125.0)   ; degC winding, derating reaches therm-derate-min
+(def therm-shell-start 80.0)  ; degC shell (magnets), derating starts
+(def therm-shell-end 100.0)
+(def therm-boot-correct 1)    ; 1 = first measurement after power-on resets the model
 (def therm-derate-min 0.3)    ; never below this, so there is always power to get home
 (def therm-meas-enable 1)     ; 1 = measure rear resistance at stops
 (def therm-meas-correct 0)    ; 1 = reset the rear model to each measurement (enable after checking logs)
@@ -57,7 +76,14 @@
 (def therm-amb 25.0)
 (def therm-t1 25.0)    ; rear winding, model
 (def therm-t2 25.0)    ; front winding, model
+(def therm-s1 25.0)    ; rear shell, model
+(def therm-s2 25.0)    ; front shell, model
+(def therm-p1 0.0)     ; rear loss, W
+(def therm-p2 0.0)
 (def therm-tmax 25.0)
+(def therm-smax 25.0)
+(def therm-booted 0)   ; set once the first measurement after power-on is done
+(def therm-cooldown-on 0) ; set while therm-cooldown runs, keeps the stop measurement out
 (def therm-meas-t 0.0) ; rear winding, last measurement
 (def therm-meas-r 0.0) ; Ohm, last measurement
 (def therm-meas-n 0)
@@ -255,11 +281,33 @@
 (def dual-motors (has-dual-motors))
 
 ; ---- Motor winding temperature functions ----
-(defun therm-step (temp r0 t0 c rth iron iq id kmh dt) {
-        (var r (* r0 (+ 1.0 (* therm-alpha (- temp t0)))))
-        (var s (/ (abs kmh) 55.0))
+; One step of the two-node model. Returns (winding shell loss-W).
+(defun therm-step (tw ts r0 t0 cw cs rws g0 g1 iron iq id kmh dt) {
+        (var r (* r0 (+ 1.0 (* therm-alpha (- tw t0)))))
+        (var v (abs kmh))
+        (var s (/ v 55.0))
         (var p (+ (* 1.5 r (+ (* iq iq) (* id id))) (* iron s (sqrt s))))
-        (+ temp (/ (* dt (- p (/ (- temp therm-amb) rth))) c))
+        (var q (/ (- tw ts) rws))
+        (list
+            (+ tw (/ (* dt (- p q)) cw))
+            (+ ts (/ (* dt (- q (* (- ts therm-amb) (+ g0 (* g1 v))))) cs))
+            p)
+})
+
+; Front rise relative to rear, used only to seed the front model from a rear
+; measurement after power-on. The front carried about half the rear's copper
+; loss on 2026-11-04; 0.7 errs warm.
+(def therm-front-ratio 0.7)
+
+; Put both models at a measured rear winding temperature
+(defun therm-reset-to (t-meas) {
+        (setq therm-t1 t-meas)
+        (setq therm-s1 t-meas)
+        (var t-f (+ therm-amb (* therm-front-ratio (- t-meas therm-amb))))
+        (if (> t-f therm-t2) {
+                (setq therm-t2 t-f)
+                (setq therm-s2 t-f)
+        })
 })
 
 (defun therm-temp-from-r (r)
@@ -267,6 +315,7 @@
 
 (defun therm-can-measure ()
     (and (= therm-meas-enable 1)
+         (= therm-cooldown-on 0)
          (not profile-suspend)
          (not motor-config-bad)
          (= cruise-on 0)
@@ -326,8 +375,19 @@
         (setq therm-amb (get-temp-fet))
         (setq therm-t1 therm-amb)
         (setq therm-t2 therm-amb)
+        (setq therm-s1 therm-amb)
+        (setq therm-s2 therm-amb)
         (setq therm-tmax therm-amb)
+        (setq therm-smax therm-amb)
         (setq therm-ts (systime))
+})
+
+; Linear derating factor between start and end temperature
+(defun therm-scale (temp t-start t-end) {
+        (var d (- 1.0 (/ (* (- 1.0 therm-derate-min) (- temp t-start)) (- t-end t-start))))
+        (if (> d 1.0) (setq d 1.0))
+        (if (< d therm-derate-min) (setq d therm-derate-min))
+        d
 })
 
 (defun therm-loop () {
@@ -336,18 +396,31 @@
         (if (> dt 1.0) (setq dt 1.0))
         (var kmh (* (get-speed) 3.6))
 
-        (setq therm-t1 (therm-step therm-t1 therm-r0 therm-t0 therm-c1 therm-rth1 therm-iron1
+        ; Ambient: the FET reads warm right after a ride, so keep the lowest value
+        (var fet (get-temp-fet))
+        (if (< fet therm-amb) (setq therm-amb fet))
+
+        (var m1 (therm-step therm-t1 therm-s1 therm-r0 therm-t0
+                therm-cw1 therm-cs1 therm-rws1 therm-g0-1 therm-g1-1 therm-iron1
                 (get-iq 1) (get-id 1) kmh dt))
-        (if dual-motors
-            (setq therm-t2 (therm-step therm-t2 therm-r0-2 therm-t0-2 therm-c2 therm-rth2 therm-iron2
-                    (run-m2 (get-iq 1)) (run-m2 (get-id 1)) kmh dt)))
+        (setq therm-t1 (ix m1 0))
+        (setq therm-s1 (ix m1 1))
+        (setq therm-p1 (ix m1 2))
+        (if dual-motors {
+                (var m2 (therm-step therm-t2 therm-s2 therm-r0-2 therm-t0-2
+                        therm-cw2 therm-cs2 therm-rws2 therm-g0-2 therm-g1-2 therm-iron2
+                        (run-m2 (get-iq 1)) (run-m2 (get-id 1)) kmh dt))
+                (setq therm-t2 (ix m2 0))
+                (setq therm-s2 (ix m2 1))
+                (setq therm-p2 (ix m2 2))
+        })
         (setq therm-tmax (if (> therm-t1 therm-t2) therm-t1 therm-t2))
+        (setq therm-smax (if (> therm-s1 therm-s2) therm-s1 therm-s2))
 
         ; Derating in steps of 0.05, so the configuration is not rewritten constantly
-        (var d (- 1.0 (/ (* (- 1.0 therm-derate-min) (- therm-tmax therm-limit-start))
-                         (- therm-limit-end therm-limit-start))))
-        (if (> d 1.0) (setq d 1.0))
-        (if (< d therm-derate-min) (setq d therm-derate-min))
+        (var dw (therm-scale therm-tmax therm-limit-start therm-limit-end))
+        (var ds (therm-scale therm-smax therm-shell-start therm-shell-end))
+        (var d (if (< dw ds) dw ds))
         (setq therm-derate (/ (to-i (* d 20.0)) 20.0))
 
         ; Resistance measurement at stops
@@ -362,9 +435,43 @@
                         (setq therm-meas-r r)
                         (setq therm-meas-t (therm-temp-from-r r))
                         (setq therm-meas-n (+ therm-meas-n 1))
-                        (if (= therm-meas-correct 1) (setq therm-t1 therm-meas-t))
+                        (if (or (= therm-meas-correct 1)
+                                (and (= therm-boot-correct 1) (= therm-booted 0)))
+                            (therm-reset-to therm-meas-t))
+                        (setq therm-booted 1)
                 })
         })
+})
+
+; REPL, for the cooldown curve after a hot ride: (therm-cooldown 40 60.0)
+; measures the rear resistance every period seconds, n times, while logging runs.
+; Rear wheel off the ground, or brake held: the DC test current pulls the rotor
+; to the nearest pole, a small jerk. Stops if the scooter moves or the throttle
+; is touched. Each result lands in the log (Wind M1 meas) and is printed.
+(defun therm-cooldown (n period) {
+        (var t-start (systime))
+        (var i 0)
+        (setq therm-cooldown-on 1)
+        (loopwhile (< i n) {
+                (if (or (> (abs (get-speed)) 0.1) (> (get-adc 0) therm-throttle-idle)) {
+                        (print "Stopped: moving or throttle")
+                        (setq i n)
+                    } {
+                        (var r (therm-measure-r))
+                        (if (> r 0.0) {
+                                (setq therm-meas-r r)
+                                (setq therm-meas-t (therm-temp-from-r r))
+                                (setq therm-meas-ts (systime))
+                                (setq therm-meas-n (+ therm-meas-n 1))
+                                (print (list "s" (to-i (secs-since t-start))
+                                    "meas" therm-meas-t "model" therm-t1 "shell" therm-s1
+                                    "FET" (get-temp-fet)))
+                        })
+                        (setq i (+ i 1))
+                        (if (< i n) (sleep period))
+                })
+        })
+        (setq therm-cooldown-on 0)
 })
 
 (defun proc-sid (id data) {
@@ -923,6 +1030,11 @@
                 '(
                     ("Wind M1" "degC" 1                (+ therm-t1 0.0))
                     ("Wind M2" "degC" 1                (+ therm-t2 0.0))
+                    ("Shell M1" "degC" 1               (+ therm-s1 0.0))
+                    ("Shell M2" "degC" 1               (+ therm-s2 0.0))
+                    ("Loss M1" "W"                     (+ therm-p1 0.0))
+                    ("Loss M2" "W"                     (+ therm-p2 0.0))
+                    ("Therm amb" "degC" 1              (+ therm-amb 0.0))
                     ("Wind M1 meas" "degC" 1           (+ therm-meas-t 0.0))
                     ("R M1 meas" "mOhm"                (* therm-meas-r 1000.0))
                     ("R M1 est" "mOhm"                 (* (get-est-res) 1000.0))
