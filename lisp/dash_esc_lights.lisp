@@ -684,7 +684,7 @@
         (setq abs-v1f v1f)
         (setq abs-v2f v2f)
 
-        (var braking (and (= abs-enable 1) dual-motors (= alarm-armed 0)
+        (var braking (and (= abs-enable 1) dual-motors
                           (> (get-adc 1) brake-light-threshold)))
         (if (not braking)
             (if (= abs-active 1) (abs-stop))
@@ -720,191 +720,6 @@
             })
 })
 
-; ---- Immobiliser ----
-; Nothing can guard while the controller is off, so the armed state is stored
-; (eeprom 104) and survives power-off: switched on armed, the scooter has no
-; throttle, and as soon as either wheel turns it locks both wheels and sounds
-; until the lights-button code is entered.
-; Arm and disarm: lights button 4 times within 5 s, standing still. Two short
-; beeps = armed (also at every power-on while armed), one long = disarmed.
-; Wheel moved more than imm-move: both motors hold with imm-hold-current
-; (handbrake, about 17 Nm per wheel at 40 A) for imm-hold-time after the last
-; movement, lights flash, the rear beeps. Tilt or rotation alone only flashes
-; and beeps. Holding is not continuous, as 40 A in a stationary motor makes
-; about 135 W of heat: 10 s of holding warms the rear winding about 1.5 K, and
-; the thermal model sees it.
-; Above imm-lock-speed it brakes instead of locking: arming needs standstill,
-; so only a scooter rolling away downhill could get there.
-; alarm-notify is the hook for the LTE modem.
-(def alarm-armed 0)
-(def alarm-active 0)         ; 1 = sounding / holding
-(def alarm-events 0)
-(def alarm-tilt 0.14)        ; rad, about 8 degrees
-(def alarm-gyro 40.0)        ; deg/s
-(def imm-move 0.05)          ; m of wheel travel that triggers the hold
-(def imm-hold-current 40.0)  ; A per motor while holding
-(def imm-hold-time 10.0)     ; s after the last movement
-(def imm-sound-time 20.0)    ; s of flashing and beeping after the last trigger
-(def imm-lock-speed 2.0)     ; m/s, above this brake instead of lock
-(def imm-hot 90.0)           ; degC modelled winding: hold at half current above this
-(def alarm-beep-v 3.0)       ; V for the motor beep
-(def alarm-toggles nil)
-(def alarm-light-last -1)
-(def alarm-ref nil)          ; (roll pitch dist-rear dist-front)
-(def alarm-ts 0)             ; last trigger
-(def imm-move-ts 0)          ; last wheel movement
-(def imm-holding 0)
-(def alarm-beep-ts 0)
-(def alarm-req 0)            ; 1 = arm/disarm requested by the gesture
-(def alarm-arm-ts 0)         ; reference taken at, triggers ignored for 2 s
-
-(defun maxf (a b) (if (> a b) a b))
-
-; Timestamps from a list that are less than 5 s old
-(defun alarm-recent (lst)
-    (if (eq lst nil) nil
-        (if (< (secs-since (first lst)) 5.0)
-            (cons (first lst) (alarm-recent (rest lst)))
-            (alarm-recent (rest lst)))))
-
-(defun alarm-beep (freq t-s)
-    (trap (foc-beep freq t-s alarm-beep-v)))
-
-(defun alarm-reference () {
-        (var rpy (get-imu-rpy))
-        (setq alarm-ref (list (ix rpy 0) (ix rpy 1)
-                (get-dist-abs) (if dual-motors (run-m2 (get-dist-abs)) 0.0)))
-        (setq alarm-arm-ts (systime))
-})
-
-; Called from the Dash frame handler with each light-on value. The first frame
-; after power-on only sets the starting state.
-(defun alarm-gesture (l) {
-        (if (< alarm-light-last 0) (setq alarm-light-last l))
-        (if (!= l alarm-light-last) {
-                (setq alarm-light-last l)
-                (var now (systime))
-                (setq alarm-toggles (alarm-recent (cons now alarm-toggles)))
-                (if (and (>= (length alarm-toggles) 4) (< (abs (get-speed)) 0.1)) {
-                        (setq alarm-toggles nil)
-                        (setq alarm-req 1)
-                })
-        })
-})
-
-(defun alarm-notify () {
-        ; LTE hook: send position and time here once the modem is fitted
-        (print "Immobiliser triggered")
-})
-
-(defun imm-release () {
-        (setq imm-holding 0)
-        (set-current 0)
-        (if dual-motors (run-m2 (set-current 0)))
-})
-
-(defun alarm-init () {
-        (var st (eeprom-read-i 104))
-        (if (and st (= st 1)) (setq alarm-armed 1))
-})
-
-(defun alarm-loop () {
-        (if (= alarm-req 1) {
-                (setq alarm-req 0)
-                (if (= alarm-armed 0)
-                    {
-                        (setq cruise-on 0)
-                        (setq alarm-armed 1)
-                        (eeprom-store-i 104 1)
-                        (app-disable-output 300)
-                        (alarm-beep 2000 0.1) (sleep 0.15) (alarm-beep 2000 0.1)
-                        (sleep 0.3)
-                        (alarm-reference)
-                    }
-                    {
-                        (if (= imm-holding 1) (imm-release))
-                        (setq alarm-active 0)
-                        (setq alarm-armed 0)
-                        (eeprom-store-i 104 0)
-                        (alarm-beep 1200 0.6)
-                    })
-        })
-        (if (= alarm-armed 1) {
-                (app-disable-output 300)
-                ; Armed at power-on: let the IMU settle, then announce and take the reference
-                (if (eq alarm-ref nil)
-                    (if (> (secs-since 0) 5.0) {
-                            (alarm-beep 2000 0.1) (sleep 0.15) (alarm-beep 2000 0.1)
-                            (sleep 0.3)
-                            (alarm-reference)
-                    }))
-                (if (not (eq alarm-ref nil)) {
-                        (var rpy (get-imu-rpy))
-                        (var g (get-imu-gyro))
-                        (var tilt (maxf (abs (- (ix rpy 0) (ix alarm-ref 0)))
-                                        (abs (- (ix rpy 1) (ix alarm-ref 1)))))
-                        (var rot (maxf (abs (ix g 0)) (maxf (abs (ix g 1)) (abs (ix g 2)))))
-                        (var moved (maxf (abs (- (get-dist-abs) (ix alarm-ref 2)))
-                                        (if dual-motors (abs (- (run-m2 (get-dist-abs)) (ix alarm-ref 3))) 0.0)))
-                        (var settled (> (secs-since alarm-arm-ts) 2.0))
-                        (var v (maxf (abs (get-speed)) (if dual-motors (abs (run-m2 (get-speed))) 0.0)))
-
-                        ; Wheel movement: hold. The reference follows the wheel,
-                        ; so each further push re-triggers and extends the hold.
-                        (if (and settled (or (> moved imm-move) (> v 0.05))) {
-                                (setq imm-move-ts (systime))
-                                (setq alarm-ref (list (ix alarm-ref 0) (ix alarm-ref 1)
-                                        (get-dist-abs) (if dual-motors (run-m2 (get-dist-abs)) 0.0)))
-                                (if (= imm-holding 0) {
-                                        (setq imm-holding 1)
-                                        (setq alarm-events (+ alarm-events 1))
-                                        (alarm-notify)
-                                })
-                                (setq alarm-active 1)
-                                (setq alarm-ts (systime))
-                        })
-                        ; Tilt or rotation without the wheels turning: sound only
-                        (if (and settled (or (> tilt alarm-tilt) (> rot alarm-gyro))) {
-                                (if (= alarm-active 0) {
-                                        (setq alarm-events (+ alarm-events 1))
-                                        (alarm-notify)
-                                })
-                                (setq alarm-active 1)
-                                (setq alarm-ts (systime))
-                        })
-
-                        (if (= imm-holding 1)
-                            (if (> (secs-since imm-move-ts) imm-hold-time)
-                                (imm-release)
-                                {
-                                    (var i (if (> therm-tmax imm-hot) (* 0.5 imm-hold-current) imm-hold-current))
-                                    (if (> v imm-lock-speed)
-                                        {
-                                            (set-brake i)
-                                            (if dual-motors (run-m2 (set-brake i)))
-                                        }
-                                        {
-                                            (set-handbrake i)
-                                            (if dual-motors (run-m2 (set-handbrake i)))
-                                        })
-                                }))
-
-                        (if (= alarm-active 1)
-                            (if (> (secs-since alarm-ts) imm-sound-time)
-                                {
-                                    (setq alarm-active 0)
-                                    ; The scooter may have been tipped over and stood up again
-                                    (if (= imm-holding 0) (alarm-reference))
-                                }
-                                ; Beep only while not holding: the beep uses the rear motor
-                                (if (and (= imm-holding 0) (> (secs-since alarm-beep-ts) 0.5)) {
-                                        (setq alarm-beep-ts (systime))
-                                        (alarm-beep 2500 0.25)
-                                })))
-                })
-        })
-})
-
 (defun proc-sid (id data) {
         (cond
             ((= id 35) {
@@ -917,7 +732,6 @@
                     (setq display-ts (systime))
                     (var drive-mode-new (bufget-u8 data 0))
                     (setq light-on (bufget-u8 data 1))
-                    (alarm-gesture light-on)
 
                     ; A second display that has not caught up yet keeps sending
                     ; the previous mode for a frame or two. Hold a new mode
@@ -1477,7 +1291,6 @@
                     ("ABS"                             (+ abs-active 0))
                     ("ABS k M1"                        (+ abs-k1 0.0))
                     ("ABS k M2"                        (+ abs-k2 0.0))
-                    ("Alarm"                           (+ alarm-armed alarm-active imm-holding))
                 )
         ))
 
@@ -1693,11 +1506,6 @@
                 (sleep 0.01)
         })
 
-        (alarm-init)
-        (loopwhile-thd ("Alarm" 200) t {
-                (alarm-loop)
-                (sleep 0.05)
-        })
 
         ; ---- Inokim OX light box ----
         ; Box pin 1 (red, 60 V) <- Switched VBUS V+ (AUX 2)
@@ -1723,14 +1531,6 @@
         ;})
 
         (loopwhile-thd ("Lights" 100) t {
-                ; Alarm sounding: everything flashes
-                (loopwhile (= alarm-active 1) {
-                        (gpio-write 'pin-tx 1) (gpio-write 'pin-rx 1) (set-aux 1 1)
-                        (sleep 0.25)
-                        (gpio-write 'pin-tx 0) (gpio-write 'pin-rx 0) (set-aux 1 0)
-                        (sleep 0.25)
-                })
-                (set-aux 1 (if (= light-on 1) 1 0))
                 ; Headlight + tail: follow the Dash lights button
                 (gpio-write 'pin-tx (if (= light-on 1) 1 0))
                 ; With light sensor (disabled): Dash button OR dark

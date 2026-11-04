@@ -189,16 +189,6 @@ Replayed over the 2026-11-04 logs it triggers once: the rear lock above. Brake o
 
 Test first with both wheels in the air: spin up, pull the brake. A free wheel stops far faster than 15 m/s², so `ABS` should go to 1 briefly. Then on a quiet, loose surface at low speed before trusting it in traffic.
 
-### Immobiliser
-
-Nothing on the controller can guard while it is switched off, so the armed state is stored instead (eeprom 104) and survives power-off.
-
-- **Arm / disarm:** lights button 4 times within 5 s while standing still. Two short beeps = armed (repeated about 5 s after every power-on while armed), one long beep = disarmed.
-- **Armed:** no throttle, ABS off. As soon as either wheel turns more than 5 cm, both motors hold their wheels (handbrake, 40 A each, about 17 Nm per wheel) until 10 s after the last movement; each further push extends it. Lights flash for 20 s after the last trigger and the rear motor beeps while not holding. Tilt over about 8° or rotation over 40 °/s without the wheels turning only flashes and beeps.
-- **Heat:** 40 A in a stationary motor is about 135 W, so the hold is not continuous; 10 s warms the rear winding about 1.5 K, the thermal model sees it, and above 90 °C modelled the hold drops to half current.
-- **Rolling away:** above 2 m/s it brakes instead of locking. Arming needs standstill, so only a scooter rolling downhill could get there.
-- `alarm-notify` is the hook for the LTE modem. Log field `Alarm`: 0 off, 1 armed, 2 sounding, 3 sounding and holding. Tuning: `imm-move`, `imm-hold-current`, `imm-hold-time`, `imm-sound-time`, `alarm-tilt`, `alarm-gyro`.
-
 ## Status
 
 Working: both motors, throttle, regen brake, drive modes (Dash ESC), cruise control, headlight + tail light, aux front light, GPS logging.
@@ -210,4 +200,5 @@ Working: both motors, throttle, regen brake, drive modes (Dash ESC), cruise cont
 - Brake light does not light up, with either a flashing or a steady signal on the light box yellow input. It most likely did not work with the original controller either, so the rear light itself (or its wiring) is suspected. Next test: 1 kΩ from rear pin 2 to pin 4 (6 V), then to pin 3 (GND).
 - Motor temperature model and rear resistance measurement written but untested on hardware (see "Motor winding temperature").
 - Optional: wheelie control (IMU, relative pitch) as a LispBM addition.
-- Charge counting, regen ABS and immobiliser written but untested on hardware. First alarm version (2026-11-04) tested: disarmed by a power cycle and 12 A front hold too weak; replaced by the immobiliser.
+- Charge counting and regen ABS written but untested on hardware.
+- Parked alarm / immobiliser tried and removed (2026-11-04): the motors' handbrake did not hold the wheels. A mechanical lock is the better answer; an LTE tracker may come with the modem.
