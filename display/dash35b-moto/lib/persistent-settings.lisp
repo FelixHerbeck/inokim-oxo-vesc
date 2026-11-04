@@ -231,7 +231,7 @@
         (setq settings-slot-maxs (map (fn (n) (setting-clamp (read-setting n) -1000.0 10000.0 100.0))
                 '(slot-max-0 slot-max-1 slot-max-2 slot-max-3)))
 
-        (if (>= drive-mode drive-mode-num) (mode-set 0))
+        (if (>= drive-mode drive-mode-num) (mode-set 1)) ; neutral, reverse removed
 })
 
 ; Rows from the mask, capped so none draw off the page.

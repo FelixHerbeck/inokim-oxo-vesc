@@ -103,7 +103,7 @@
         ((= a 2) (setq page-now (mod (+ page-now (- page-num 1)) page-num)))
         ((= a 3) (setq page-now (if (= page-now page-num) 0 page-num)))
         ((= a 4) (if (< drive-mode (- drive-mode-num 1)) (mode-set (+ drive-mode 1))))
-        ((= a 5) (if (> drive-mode 0) (mode-set (- drive-mode 1))))
+        ((= a 5) (if (> drive-mode 1) (mode-set (- drive-mode 1)))) ; stops at neutral, reverse removed
         ((= a 6) (setq light-on (not light-on)))
         ((= a 7) {
                 (setq backlight-dim (not backlight-dim))

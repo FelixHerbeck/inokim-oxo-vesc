@@ -5,7 +5,7 @@ VESC Dash35B UI for single horizontal display with 480x320 resolution and four b
 **Note**  
 Version 2.4 goes with Dash ESC 2.4. The drive mode, the status banners and the logging button all need it.
 
-## Motorcycle view (2.4-moto1)
+## Motorcycle view (2.4-moto2)
 
 This build replaces the standard screen with a full-screen view in the style of a motorcycle TFT. It is on by default; set `config-moto-view` to `false` in config.lisp for the original views.
 
@@ -14,6 +14,7 @@ This build replaces the standard screen with a full-screen view in the style of 
 - Top: SLOPE marker from the IMU pitch, about 15 % either way. `config-moto-slope-sign` flips it.
 - Right: speed, battery scale with percentage, controller temperature (red above the controller warning setting) and clock.
 - Clock: GPS time (UTC) seen by the display, or UTC sent by the controller on CAN id 204, plus `config-moto-utc-offset` and Israeli summer time with `config-moto-dst-israel`. Shows --:-- without a time source.
+- Reverse removed: drive mode down stops at N, and a mode beyond the configured number falls back to N instead of R.
 - The on-display settings page and the other pages are not shown in this view; the settings are on the package page in VESC Tool. Drive mode, lights, cruise and logging buttons work as before.
 
 
