@@ -43,18 +43,21 @@
 ; drive mode current scale is reduced linearly to therm-derate-min at the
 ; matching end temperature; the lower of the two wins.
 ; All of these can be changed live in the REPL with setq.
-(def therm-cw1 900.0)      ; rear winding + stator heat capacity, J/K
-(def therm-cs1 1600.0)     ; rear shell + magnets, J/K
-(def therm-rws1 0.25)      ; rear winding -> shell, K/W
-(def therm-g0-1 1.0)       ; rear shell -> air standing still, W/K
-(def therm-g1-1 0.08)      ; rear shell -> air, extra W/K per km/h
-(def therm-cw2 600.0)      ; front (stock 1500 W hub)
-(def therm-cs2 1100.0)
-(def therm-rws2 0.35)
-(def therm-g0-2 0.8)
-(def therm-g1-2 0.06)
-(def therm-iron1 25.0)     ; iron loss in W at 55 km/h, scales with speed^1.5
-(def therm-iron2 15.0)
+; Rear constants fitted on the bench 2026-11-07 (40 A standstill heating to 90 degC, cooldown,
+; 20 min no-load spin at 50 km/h): 115 resistance measurements, 1.1 K RMS. therm-g1-1 is not
+; determined on a stand (still air) and set conservatively; front scaled from the rear (x0.67).
+(def therm-cw1 436.0)      ; rear winding + stator heat capacity, J/K
+(def therm-cs1 2129.0)     ; rear shell + magnets, J/K
+(def therm-rws1 0.28)      ; rear winding -> shell, K/W
+(def therm-g0-1 1.34)       ; rear shell -> air standing still, W/K
+(def therm-g1-1 0.04)      ; rear shell -> air, extra W/K per km/h
+(def therm-cw2 292.0)      ; front (stock 1500 W hub)
+(def therm-cs2 1426.0)
+(def therm-rws2 0.42)
+(def therm-g0-2 0.90)
+(def therm-g1-2 0.027)
+(def therm-iron1 54.0)     ; iron loss in W at 55 km/h, scales with speed^1.5
+(def therm-iron2 36.0)
 (def therm-limit-start 100.0) ; degC winding, derating starts
 (def therm-limit-end 125.0)   ; degC winding, derating reaches therm-derate-min
 (def therm-shell-start 80.0)  ; degC shell (magnets), derating starts
