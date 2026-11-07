@@ -84,7 +84,7 @@ See `diagrams/inokim_light_module_pinout.jpg`. Measured with the scooter on.
 | Setting | Rear (ID 48) | Front (ID 49) |
 |---|---|---|
 | Motor current max / brake | 90 A / −35 A | 70 A / −20 A |
-| Battery current max / regen | 50 A / −12 A | 40 A / −6 A (total 90 A) |
+| Battery current max / regen | 53 A / −12 A | 42 A / −6 A (total 95 A) |
 | Absolute max current | 150 A | 150 A |
 | Battery cutoff start / end | 54.4 / 49.6 V | 54.4 / 49.6 V |
 | Regen voltage cutoff start / end | 67.0 / 67.6 V | 67.0 / 67.6 V |
@@ -121,6 +121,9 @@ App (shared, ID 48): app to use *ADC* (not ADC and UART), permanent UART off (TX
 | Front | Battery current max | 35 A | 40 A (front was at its limit at top speed) |
 | Rear | Field weakening current | 10 A | 15 A |
 | Rear + front | Wheel diameter | 250 mm | 245 mm (VESC read 2% high vs GPS) |
+| **2026-11-07** | | | |
+| Rear | Battery current max | 50 A | 53 A |
+| Front | Battery current max | 40 A | 42 A (total 95 A, below the BMS 100–110 A; on 2026-11-04 the battery limits capped full throttle at 25–50 km/h and the front capped top speed, the motor limits were barely reached) |
 
 Notes:
 - *Slow ABS current limit* is forced off by the Duet firmware; it cannot be enabled with the standard firmware. The configs keep it off, so loading them no longer shows the "Parameters truncated" warning.
