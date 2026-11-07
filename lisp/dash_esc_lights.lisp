@@ -91,6 +91,7 @@
 (def therm-still 0.0)
 (def therm-ts 0)
 (def therm-derate 1.0)
+(def therm-measuring 0) ; set during a resistance measurement, keeps set-profile out
 
 (def drive-mode 1)
 (def val-brk 0.0)
@@ -171,6 +172,7 @@
         (var profile (list i-min i-max-d s-min s-max))
 
         (if (and (not profile-suspend)
+                 (= therm-measuring 0)
                  (or (not (eq profile profile-last))
                      (not (= (conf-get 'l-current-min-scale) i-min))
                      (not (= (conf-get 'l-current-max-scale) i-max-d)))) {
@@ -325,8 +327,23 @@
          (> (get-adc 1) brake-light-threshold)))
 
 ; One rear resistance measurement in Ohm, -1 on failure
-(defun therm-measure-r ()
-    (conf-measure-res therm-meas-current therm-meas-samples))
+; Neutral holds the current scale at 0, and the scale also caps the test current
+; (lo_current_max), so the measurement would push no current at all. Lift the
+; scale to 1 for the measurement only, keep set-profile from rewriting it
+; meanwhile, and always put it back (trap), so neutral cannot be left open.
+(defun therm-measure-r () {
+        (setq therm-measuring 1)
+        (var sc (conf-get 'l-current-max-scale))
+        (if (< sc 1.0) {
+                (conf-set 'l-current-max-scale 1.0)
+                (sleep 0.02)
+        })
+        (var res (trap (conf-measure-res therm-meas-current therm-meas-samples)))
+        (conf-set 'l-current-max-scale sc)
+        (setq therm-measuring 0)
+        (setq profile-last nil)
+        (if (eq (first res) 'exit-ok) (second res) -1.0)
+})
 
 ; REPL test, wheel in the air or brake held: (therm-test)
 (defun therm-test () {
@@ -368,10 +385,10 @@
                 (setq therm-t0 et)
             }
             {
-                (setq therm-r0 (conf-get 'foc-motor-r))
+                (setq therm-r0 (* 0.001 (conf-get 'foc-motor-r))) ; conf-get gives milliohm
                 (setq therm-t0 25.0)
             })
-        (if dual-motors (setq therm-r0-2 (run-m2 (conf-get 'foc-motor-r))))
+        (if dual-motors (setq therm-r0-2 (* 0.001 (run-m2 (conf-get 'foc-motor-r)))))
         (setq therm-amb (get-temp-fet))
         (setq therm-t1 therm-amb)
         (setq therm-t2 therm-amb)
