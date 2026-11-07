@@ -15,6 +15,7 @@ Claude's cloud shell and the laptop's Linux VM (`device_bash`) both cannot reach
 - `vesc_runner.py` (Windows Python) watches `queue/` and runs only `vesc_cli.py` commands. It is alive when `queue/heartbeat.txt` holds a time within a few seconds of `date +%s`.
 - If it is not running: computer use, resolve + request access for **File Explorer** (click tier), open File Explorer, navigate to the user folder (address-bar chevron, user name) > `workspace` > `scooter` and double-click `start_runner.bat`. Typing into terminals or Explorer is blocked by design; do not try to work around that. Starting the runner needs the user's go-ahead in the conversation.
 - Submit commands from `device_bash`: `cd $HOME/mnt/workspace/scooter && ./q.sh <unique-name> <timeout-s> --tcp 192.168.1.155 <vesc_cli args>`. Output starts with `rc=`. Use a new unique name every call. `device_bash` calls cap at 180 s; keep each command shorter (a full log is ~80 s per 2.7 MB).
+- The runner handles one command at a time, so the heartbeat lags while a command runs. If a `q.sh` call returns nothing, run it again with a new name before concluding anything.
 - Express address: 192.168.1.155 (last seen). If it fails, `./q.sh scan$RANDOM 60 discover` (broadcast is blocked by the firewall; the tool falls back to a subnet scan).
 
 ## Keeping the laptop copies current
