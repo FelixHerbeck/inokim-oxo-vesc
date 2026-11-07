@@ -20,7 +20,7 @@ Claude's cloud shell and the laptop's Linux VM (`device_bash`) both cannot reach
 
 ## Keeping the laptop copies current
 
-`./fetch_repo.sh` downloads the repo files (configs, script, display package, tool, runner scripts) from GitHub `main` into `repo/` and `vesc_cli/`. Run it after any push. Files can also be pushed from the cloud with `device_commit_files`, but that may hand back a cached older copy when the staged path is reused: stage under a new file name each time and verify with `sha1sum`/`grep`.
+`./fetch_repo.sh` downloads the repo files (configs, script, display package, tool, runner scripts) from GitHub `main` into `repo/` and `vesc_cli/`. Run it after any push. GitHub's raw file server can hand out the previous version for a few minutes after a push, so check the changed value (`grep`/`sha1sum`) after fetching; if it is stale, wait or stage the file with `device_commit_files`. Files can also be pushed from the cloud with `device_commit_files`, but that may hand back a cached older copy when the staged path is reused: stage under a new file name each time and verify with `sha1sum`/`grep`.
 
 ## Commands (vesc_cli)
 
