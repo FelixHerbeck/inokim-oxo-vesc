@@ -207,7 +207,6 @@ Working: both motors, throttle, regen brake, drive modes (Dash ESC), cruise cont
 
 ## Known issues / to do
 
-- **Temporary (2026-11-07 session):** automatic power-off is disabled on the controller (`shutdown_mode` 2, button only) for the test session. The repo app config keeps the normal setting (7, off after 30 min idle); load it with `vesc_cli appconf set 48 config/current/appconf_ID48.xml` to switch it back on.
 - Controller now runs the current `lisp/dash_esc_lights.lisp` and the display runs 2.4-moto3 (installed with vesc_cli on 2026-11-07). Before riding: ABS check with both wheels in the air, rear stick test, slow test ride.
 
 - Field weakening: 20 A at 85% duty start made the rear motor keep driving after the throttle was released (wheels in the air). 10 A at 92% (Nov 3) works: rear id −10 A and +11 to +18 A motor current at top speed instead of −2 to −4 A drag, no torque after releasing the throttle, top speed 57 km/h (GPS). Now testing 15 A, with the front battery current raised to 40 A because the front was at its 35 A limit at top speed. Repeat the stick test with the wheel in the air before riding.
