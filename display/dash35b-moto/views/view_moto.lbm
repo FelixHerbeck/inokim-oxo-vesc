@@ -17,7 +17,7 @@
 (def mv-maroon 0x4A0810) ; left panel
 (def mv-dim    0x6E0E1A) ; empty power arc, ticks
 (def mv-red    0xE11E2D) ; power arc, underlines, warnings
-(def mv-green  0x78DC28) ; neutral, slope marker
+(def mv-green  0x78DC28) ; neutral, efficiency marker
 (def mv-white  0xF5F5F5) ; text on the left panel
 
 ; Power arc: circle whose left edge is the boundary of the dark panel
@@ -114,8 +114,6 @@
         ; Speed unit
         (mv-text 396 136 80 34 font-moto-32 (u-speed-str) 'l 28 mv-pal-ink)
 
-        ; Slope label
-        (mv-text 338 19 60 14 font-12 "SLOPE" 'c 11 mv-pal-ink)
 
         ; Battery scale end letters, inside the lower wedge
         (mv-text 304 248 14 14 font-16 "E" 'r 12 mv-pal-ink-wedge)
@@ -183,16 +181,27 @@
         (disp-render buf x y (if on mv-pal-badge-on mv-pal-badge-off))
 })
 
-(defun mv-draw-slope (s) {
+; Average energy use of the ride on a bar like a lean indicator: the marker
+; sits in the middle at 30 Wh/km, the triangles mark 20 and 40, the ends 10
+; and 50. Below it the value. whkm < 0: not enough distance yet, no marker.
+(def mv-eff-mid 30.0)
+(def mv-eff-span 20.0)
+
+(defun mv-draw-eff (whkm) {
         (var buf (img-buffer dm-pool 'indexed4 204 18))
         (img-clear buf)
         (img-rectangle buf 3 2 2 15 1 '(filled))
         (img-rectangle buf 199 2 2 15 1 '(filled))
         (img-triangle buf 55 15 63 15 59 9 1 '(filled))
         (img-triangle buf 141 15 149 15 145 9 1 '(filled))
-        (var gx (+ 102 (* (/ (clamp s -15.0 15.0) 15.0) 86)))
-        (img-rectangle buf (- gx 6) 3 12 11 2 '(filled))
+        (if (>= whkm 0) {
+                (var gx (+ 102 (* (clamp (/ (- whkm mv-eff-mid) mv-eff-span) -1.0 1.0) 86)))
+                (img-rectangle buf (- gx 6) 3 12 11 2 '(filled))
+        })
         (disp-render buf 266 1 (list mv-bg mv-ink mv-green mv-green))
+        (mv-text 318 19 100 14 font-12
+            (if (>= whkm 0) (str-merge (str-from-n (to-i whkm) "%d ") (u-eff-str)) (str-merge "-- " (u-eff-str)))
+            'c 11 mv-pal-ink)
 })
 
 (defun mv-draw-battery (soc) {
@@ -283,7 +292,6 @@
 
 ; ---- Thread ----
 
-(def mv-slope 0.0) ; filtered, percent
 
 (defun mv-range () {
         (var r (if (and (> stats-km 0.1) (> stats-wh 0.5))
@@ -293,10 +301,6 @@
 })
 
 (defun mv-state () {
-        ; Slope from the IMU pitch (radians), low-pass filtered against bumps
-        (var s (* config-moto-slope-sign 100.0 (tan stats-angle-pitch)))
-        (setq mv-slope (+ mv-slope (* 0.15 (- s mv-slope))))
-
         (list
             drive-mode                                                  ; 0
             (to-i (round (abs (u-speed stats-kmh))))                    ; 1
@@ -308,7 +312,9 @@
             light-on                                                    ; 7
             (to-i (round stats-temp-motor))                             ; 8
             (* (round (* (u-dist stats-km) 10.0)) 0.1)                  ; 9
-            (to-i (round mv-slope))                                     ; 10
+            (if (> stats-km 0.3)                                        ; 10 Wh/km (or Wh/mi) this ride
+                (to-i (round (/ (- stats-wh stats-wh-chg) (u-dist stats-km))))
+                -1)
             (to-i (round stats-temp-esc))                               ; 11
             (mv-clock-str)                                              ; 12
         )
@@ -359,7 +365,7 @@
 
                 (if (ch 9) (mv-text 179 178 72 32 font-moto-32 (str-from-n (ix st 9) "%.1f") 'c 28 mv-pal-ink))
 
-                (if (ch 10) (mv-draw-slope (ix st 10)))
+                (if (ch 10) (mv-draw-eff (ix st 10)))
 
                 ; Controller temperature, red above the controller warning setting
                 (if (ch 11) {

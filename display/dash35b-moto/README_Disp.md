@@ -5,13 +5,13 @@ VESC Dash35B UI for single horizontal display with 480x320 resolution and four b
 **Note**  
 Version 2.4 goes with Dash ESC 2.4. The drive mode, the status banners and the logging button all need it.
 
-## Motorcycle view (2.4-moto2)
+## Motorcycle view (2.4-moto3)
 
 This build replaces the standard screen with a full-screen view in the style of a motorcycle TFT. It is on by default; set `config-moto-view` to `false` in config.lisp for the original views.
 
 - Left: drive mode (green N in neutral), power arc filling from the bottom up to `config-moto-kw-max`, range, power in kW.
 - Middle: CRUISE and LIGHT badges, motor temperature (red above the motor warning setting), trip.
-- Top: SLOPE marker from the IMU pitch, about 15 % either way. `config-moto-slope-sign` flips it.
+- Top: average energy use of the ride in Wh/km (regen subtracted), as a marker on a bar centred on 30 Wh/km (triangles at 20 and 40) with the value below it. Shown after 0.3 km.
 - Right: speed, battery scale with percentage, controller temperature (red above the controller warning setting) and clock.
 - Clock: GPS time (UTC) seen by the display, or UTC sent by the controller on CAN id 204, plus `config-moto-utc-offset` and Israeli summer time with `config-moto-dst-israel`. Shows --:-- without a time source.
 - Reverse removed: drive mode down stops at N, and a mode beyond the configured number falls back to N instead of R.

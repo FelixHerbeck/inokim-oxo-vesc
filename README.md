@@ -197,6 +197,7 @@ Test first with both wheels in the air: spin up, pull the brake. A free wheel st
 - Rebuild without VESC Tool: `python3 build_pkg.py <package dir> <vesc_pkg>/lib_code_server/code_server.lisp dash35b-moto.vescpkg`.
 - Clock: GPS time seen by the display, or UTC from the controller on CAN id 204 (sent by `lisp/dash_esc_lights.lisp`), with UTC+2 and Israeli summer time.
 - Motor temperature shows the winding model from the controller script; with the older script it shows `--`.
+- Top bar (2.4-moto3): average Wh/km of the ride instead of the slope marker. The IMU pitch and roll did not follow the road grade on 2026-11-04 (correlation about 0.15 against GPS altitude over 95 stretches; pitch −27° at rest), so the slope could not be shown.
 - Reverse removed from the display (2.4-moto2): drive mode down stops at N. Reverse did nothing anyway (reverse current 0 in Dash ESC).
 
 ## Status

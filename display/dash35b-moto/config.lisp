@@ -11,7 +11,6 @@
 (def config-moto-kw-max 5.5)      ; power that fills the arc, kW
 (def config-moto-utc-offset 2)    ; hours, for the clock (GPS time is UTC)
 (def config-moto-dst-israel true) ; add an hour in Israeli summer time
-(def config-moto-slope-sign 1.0)  ; -1.0 if the slope marker moves the wrong way
 
 (def config-battery-hot 55.0) ; Displays warning indicator, Degrees C
 (def config-esc-hot 80.0) ; Degrees C
