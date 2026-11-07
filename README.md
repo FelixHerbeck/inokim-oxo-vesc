@@ -167,6 +167,9 @@ The 10 Hz logs alone cannot calibrate it: the back-EMF does drift down about 0.8
 6. **Optional:** an IR thermometer on the hub shell (on a piece of matt tape) at a few of the same moments, to check `Shell M1`.
 7. **Fit.** `python3 tools/fit_thermal.py <logs of the day, in order> --r0 <R0 from therm-cal> --t0 <its temperature>`. It prints `setq` lines for the REPL and flags the constants the data said little about (those stay close to the starting estimates), plus a check prediction for 10 min at 60 A. Put the values in the defs, and once the model tracks the measurements within about 5 K, consider `(setq therm-meas-correct 1)`.
 
+**Calibration log**
+- 2026-11-07, phase 1 (repeatability, rear wheel in the air, controller at 26.4–27.0 °C): 56.33, 56.46, 56.51, 56.55, 56.60 mΩ. Spread 0.27 mΩ (pass, limit 1 mΩ), about 1 °C; the readings agree with the 56.39 mΩ from motor detection. The small upward drift follows the controller warming (FET 26.8 → 27.0 °C). The first attempt read about 1 Ω: in neutral the drive profile's zero current scale also capped the test current; fixed by lifting the scale during the measurement. Same session: the model's reference resistance was read in milliohm as ohm (1000× copper loss), fixed before any ride.
+
 Tested on synthetic data built from the 2026-11-04 climb (two climbs, 50 points, 2 K noise, deliberately different true constants): fitted to 1.8 K RMS; for 10 min at 60 A it predicts 146 °C against a true 140 °C (starting constants: 150 °C).
 
 Untested on hardware. If the LDR is fitted later, uncomment the marked parts and calibrate the thresholds with `(get-adc 2)` in the REPL.
