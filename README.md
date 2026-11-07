@@ -23,6 +23,7 @@ config/original/   configs as exported from the controller (first export, plus t
 config/current/    corrected configs (see "Config changes")
 lisp/              Dash ESC 2.5 script + light box / brake light / auto-light control
 tools/             fit_thermal.py: fits the motor heat model to logged resistance measurements
+tools/vesc_cli/    command-line VESC access: logs, configs, Lisp, display package, REPL (see its README)
 diagrams/          wiring diagrams and pinouts (JPEG)
 ```
 
