@@ -1031,6 +1031,9 @@ def main():
     except VescError as e:
         print(f'error: {e}', file=sys.stderr)
         sys.exit(1)
+    except OSError as e:
+        print(f'error: cannot reach the scooter ({e}); is it switched on and on Wi-Fi?', file=sys.stderr)
+        sys.exit(2)
 
 
 if __name__ == '__main__':

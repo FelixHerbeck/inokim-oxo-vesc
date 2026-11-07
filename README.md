@@ -215,7 +215,6 @@ Working: both motors, throttle, regen brake, drive modes (Dash ESC), cruise cont
 
 ## Known issues / to do
 
-- **Temporary (2026-11-07, motor temperature calibration):** automatic power-off is disabled on the controller (`shutdown_mode` 2, button only). The repo app config keeps the normal setting (7, off after 30 min idle); restore with `vesc_cli appconf set 48 config/current/appconf_ID48.xml`.
 
 - Controller now runs the current `lisp/dash_esc_lights.lisp` and the display runs 2.4-moto3 (installed with vesc_cli on 2026-11-07). Before riding: ABS check with both wheels in the air, rear stick test, slow test ride.
 
