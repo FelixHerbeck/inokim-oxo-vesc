@@ -92,6 +92,7 @@
 (def therm-ts 0)
 (def therm-derate 1.0)
 (def therm-measuring 0) ; set during a resistance measurement, keeps set-profile out
+(def bench-open 0)      ; set while a bench test has the limits opened, keeps set-profile out
 
 (def drive-mode 1)
 (def val-brk 0.0)
@@ -173,6 +174,7 @@
 
         (if (and (not profile-suspend)
                  (= therm-measuring 0)
+                 (= bench-open 0)
                  (or (not (eq profile profile-last))
                      (not (= (conf-get 'l-current-min-scale) i-min))
                      (not (= (conf-get 'l-current-max-scale) i-max-d)))) {
@@ -331,14 +333,18 @@
 ; (lo_current_max), so the measurement would push no current at all. Lift the
 ; scale to 1 for the measurement only, keep set-profile from rewriting it
 ; meanwhile, and always put it back (trap), so neutral cannot be left open.
-(defun therm-measure-r () {
+(defun therm-measure-r () (therm-measure-at therm-meas-current therm-meas-samples))
+
+; Same with a chosen current and sample count. A very large sample count holds
+; the current for the firmware's 10 s timeout (bench heating).
+(defun therm-measure-at (current samples) {
         (setq therm-measuring 1)
         (var sc (conf-get 'l-current-max-scale))
         (if (< sc 1.0) {
                 (conf-set 'l-current-max-scale 1.0)
                 (sleep 0.02)
         })
-        (var res (trap (conf-measure-res therm-meas-current therm-meas-samples)))
+        (var res (trap (conf-measure-res current samples)))
         (conf-set 'l-current-max-scale sc)
         (setq therm-measuring 0)
         (setq profile-last nil)
@@ -489,6 +495,183 @@
                 })
         })
         (setq therm-cooldown-on 0)
+})
+
+; ---- Bench tests: scooter on a stand, BOTH WHEELS IN THE AIR ----
+; Started from the REPL in a thread of their own, e.g.
+;   (spawn 200 bench-heat 40.0 900)      rear: 40 A held at standstill, 10 s blocks
+;   (spawn 200 therm-cooldown 35 60.0)   rear: cooldown measurements
+;   (spawn 200 bench-iron 1 16240 4 300) motor 1 at 16240 erpm (~50 km/h), 4 x 300 s,
+;                                        resistance checked after each block
+;   (spawn 200 bench-top 1 25.0 20)      motor 1, 25 A no-load to top speed for 20 s
+; (setq bench-stop 1) stops any of them. Every loop checks the abort limits and
+; ends by itself on: winding over bench-max-temp, either FET over bench-max-fet,
+; battery under bench-min-vin, any fault. Results go into the log (Wind M1 meas,
+; R M1 meas) and bench-state / bench-top-erpm for the REPL.
+(def bench-stop 0)
+(def bench-state "idle")
+(def bench-t0 0)
+(def bench-max-temp 100.0)
+(def bench-max-fet 70.0)
+(def bench-min-vin 58.0)
+(def bench-top-erpm 0.0)
+(def bench-top-duty 0.0)
+(def bench-top-id 0.0)
+
+; Open the current scale and speed limits on both motors for a bench test
+; (neutral holds them at 0 and about 25 km/h), and put back exactly what was there.
+(def bench-saved nil)
+(defun bench-limits-open () {
+        (setq bench-open 1)
+        (setq bench-saved (list
+                (conf-get 'l-current-max-scale) (conf-get 'l-min-erpm) (conf-get 'l-max-erpm)
+                (run-m2 (conf-get 'l-current-max-scale)) (run-m2 (conf-get 'l-min-erpm)) (run-m2 (conf-get 'l-max-erpm))))
+        (conf-set 'l-current-max-scale 1.0)
+        (conf-set 'l-min-erpm -30000.0)
+        (conf-set 'l-max-erpm 30000.0)
+        (run-m2 (conf-set 'l-current-max-scale 1.0))
+        (run-m2 (conf-set 'l-min-erpm -30000.0))
+        (run-m2 (conf-set 'l-max-erpm 30000.0))
+})
+
+(defun bench-limits-close () {
+        (if bench-saved {
+                (conf-set 'l-current-max-scale (ix bench-saved 0))
+                (conf-set 'l-min-erpm (ix bench-saved 1))
+                (conf-set 'l-max-erpm (ix bench-saved 2))
+                (run-m2 (conf-set 'l-current-max-scale (ix bench-saved 3)))
+                (run-m2 (conf-set 'l-min-erpm (ix bench-saved 4)))
+                (run-m2 (conf-set 'l-max-erpm (ix bench-saved 5)))
+        })
+        (setq bench-open 0)
+        (setq profile-last nil)
+})
+
+(defun bench-abort-reason ()
+    (cond
+        ((= bench-stop 1) "stopped")
+        ((> therm-meas-t bench-max-temp) "winding hot")
+        ((> (get-temp-fet) bench-max-fet) "FET hot")
+        ((and dual-motors (> (run-m2 (get-temp-fet)) bench-max-fet)) "FET2 hot")
+        ((< (get-vin) bench-min-vin) "battery low")
+        ((not (= (get-fault) 0)) "fault")
+        ((and dual-motors (not (= (run-m2 (get-fault)) 0))) "fault m2")
+        (t nil)))
+
+(defun bench-record (r)
+    (if (> r 0.0) {
+            (setq therm-meas-r r)
+            (setq therm-meas-t (therm-temp-from-r r))
+            (setq therm-meas-n (+ therm-meas-n 1))
+            (setq therm-meas-ts (systime))
+    }))
+
+; Rear: hold `current` through the stationary motor in 10 s blocks until the
+; measured winding reaches bench-max-temp - 10, max-time passes, or an abort.
+(defun bench-heat (current max-time) {
+        (setq bench-stop 0)
+        (setq bench-t0 (systime))
+        (setq therm-cooldown-on 1)
+        (var why nil)
+        (loopwhile (not why) {
+                (setq bench-state "heat")
+                (bench-record (therm-measure-at current 100000000))
+                (setq why (cond
+                        ((bench-abort-reason) (bench-abort-reason))
+                        ((> therm-meas-t (- bench-max-temp 10.0)) "target")
+                        ((> (secs-since bench-t0) max-time) "time")
+                        (t nil)))
+        })
+        (setq therm-cooldown-on 0)
+        (setq bench-state (str-merge "heat done: " why))
+})
+
+(defun bench-rpm (motor) (if (= motor 2) (run-m2 (get-rpm)) (get-rpm)))
+
+; Spin at erpm for secs with the app output held off. Returns an abort reason or nil.
+(defun bench-spin-hold (motor erpm secs) {
+        (var t0 (systime))
+        (var why nil)
+        (loopwhile (and (not why) (< (secs-since t0) secs)) {
+                (app-disable-output 200)
+                (if (= motor 2) (run-m2 (set-rpm erpm)) (set-rpm erpm))
+                (setq why (bench-abort-reason))
+                (sleep 0.05)
+        })
+        why
+})
+
+; Bring a motor to a stop: gentle brake (regen may be cut near full charge),
+; then coasting, at most 90 s.
+(defun bench-stop-motor (motor) {
+        (var t0 (systime))
+        (loopwhile (and (> (abs (bench-rpm motor)) 100) (< (secs-since t0) 90)) {
+                (app-disable-output 200)
+                (if (= motor 2) (run-m2 (set-brake 10.0)) (set-brake 10.0))
+                (sleep 0.05)
+        })
+        (if (= motor 2) (run-m2 (set-current 0)) (set-current 0))
+        (sleep 1.0)
+})
+
+; Iron loss: spin blocks with a rear resistance measurement after each.
+; The limits are opened meanwhile (neutral holds the current at 0).
+(defun bench-iron-run (motor erpm blocks block-secs) {
+        (var why nil)
+        (var i 0)
+        (loopwhile (and (not why) (< i blocks)) {
+                (setq bench-state (str-from-n i "spin %d"))
+                (setq why (bench-spin-hold motor erpm block-secs))
+                (setq bench-state "stopping")
+                (bench-stop-motor motor)
+                (if (not why) (bench-record (therm-measure-r)))
+                (setq i (+ i 1))
+        })
+        (if why why "ok")
+})
+
+; The limits are put back even if the run throws (trap), so neutral cannot be left open.
+(defun bench-iron (motor erpm blocks block-secs) {
+        (setq bench-stop 0)
+        (setq bench-t0 (systime))
+        (setq therm-cooldown-on 1)
+        (bench-limits-open)
+        (var res (trap (bench-iron-run motor erpm blocks block-secs)))
+        (if (not (eq (first res) 'exit-ok)) (bench-stop-motor motor))
+        (bench-limits-close)
+        (setq therm-cooldown-on 0)
+        (setq bench-state (str-merge "iron done: " (if (eq (first res) 'exit-ok) (second res) "error")))
+})
+
+; No-load top speed: a fixed current until the motor runs out of voltage
+; (field weakening included); records the highest erpm, its duty and id.
+(defun bench-top-run (motor current secs) {
+        (var why nil)
+        (loopwhile (and (not why) (< (secs-since bench-t0) secs)) {
+                (app-disable-output 200)
+                (if (= motor 2) (run-m2 (set-current current)) (set-current current))
+                (var e (abs (bench-rpm motor)))
+                (if (> e bench-top-erpm) {
+                        (setq bench-top-erpm e)
+                        (setq bench-top-duty (if (= motor 2) (run-m2 (get-duty)) (get-duty)))
+                        (setq bench-top-id (if (= motor 2) (run-m2 (get-id)) (get-id)))
+                })
+                (setq bench-state "top")
+                (setq why (bench-abort-reason))
+                (sleep 0.05)
+        })
+        (if why why "ok")
+})
+
+(defun bench-top (motor current secs) {
+        (setq bench-stop 0)
+        (setq bench-t0 (systime))
+        (setq bench-top-erpm 0.0)
+        (bench-limits-open)
+        (var res (trap (bench-top-run motor current secs)))
+        (bench-stop-motor motor)
+        (bench-limits-close)
+        (setq bench-state (str-merge "top done: " (if (eq (first res) 'exit-ok) (second res) "error")))
 })
 
 ; ---- Battery state of charge by charge counting ----
