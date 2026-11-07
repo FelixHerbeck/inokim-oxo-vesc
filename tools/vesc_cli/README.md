@@ -11,6 +11,10 @@ The protocol follows the VESC firmware (vedderb/bldc), the Express firmware (ved
 
 Motor 1 is CAN 48 and motor 2 is CAN 49 (`--esc-id`, `--m2-id`). Over Wi-Fi everything on the motors is forwarded over CAN; over USB the STM32 is local.
 
+## Running it from Claude (runner/)
+
+Claude's own shell cannot reach the home network, so `runner/vesc_runner.py` runs on the laptop (`runner/start_runner.bat`) and executes only `vesc_cli` commands dropped as JSON files into its `queue/` folder; `runner/q.sh` submits one and waits for the output.
+
 ## Commands
 
 ```
@@ -26,7 +30,8 @@ python vesc_cli.py mcconf set 48 ../../config/current/mcconf_rear_ID48.xml
 python vesc_cli.py appconf set 48 ../../config/current/appconf_ID48.xml
 python vesc_cli.py lisp upload --file ../../lisp/dash_esc_lights.lisp
 python vesc_cli.py lisp repl --expr "(therm-test)" --wait 3
-python vesc_cli.py lisp stop | start
+python vesc_cli.py lisp stop | start [--wait 10]     # shows console output
+python vesc_cli.py lisp stats | read --file x | reboot
 python vesc_cli.py pkg ../../display/dash35b-moto.vescpkg   # finds the display on CAN
 ```
 
@@ -35,8 +40,9 @@ python vesc_cli.py pkg ../../display/dash35b-moto.vescpkg   # finds the display 
 - Writes (configs, Lisp, packages) only when both motors are below 100 erpm; `--force` skips the check.
 - `mcconf set`/`appconf set` read the device first, change only what differs from the file, print every change, save the device's config before and after in `backups/<time>/`, and read back afterwards.
 - Current/voltage offset calibration (`foc_offsets_*`) is never taken from a file.
+- The drive-mode runtime limits (`l_current_max_scale`, `l_current_min_scale`, `l_min_erpm`, `l_max_erpm`) are left alone unless `--include-profile` is given: Dash ESC rewrites them, so the device normally shows the current mode (neutral: scale 0).
 - The config signature must match one of the parameter definitions, otherwise nothing is decoded or written.
 
 ## Tests
 
-`python test_sim.py` runs every command against a simulated Express + Duet + display: config dry run, write and read-back, standstill refusal, Lisp upload of the real script, display package install, log download. The config encoding was also checked against the firmware's own deserializer (bldc `confgenerator.c`, compiled on a PC): byte-identical round trips for the rear mcconf and the appconf, and signatures equal to the firmware's `MCCONF_SIGNATURE`/`APPCONF_SIGNATURE` for 7.01. Not yet run against the real scooter.
+`python test_sim.py` runs every command against a simulated Express + Duet + display: config dry run, write and read-back, standstill refusal, Lisp upload of the real script, display package install, log download. The config encoding was also checked against the firmware's own deserializer (bldc `confgenerator.c`, compiled on a PC): byte-identical round trips for the rear mcconf and the appconf, and signatures equal to the firmware's `MCCONF_SIGNATURE`/`APPCONF_SIGNATURE` for 7.01. First run against the scooter on 2026-11-07 over Wi-Fi (Express at 192.168.1.155, found by the network scan because the broadcast did not get through the laptop's firewall): info, values, backup, log list and download, config dry runs (device = repo files), a config write and restore with read-back, the display package install and the Lisp upload all worked. Firmware 7.00 quirk: after replacing the running script the Lisp evaluator stayed wedged (contexts stuck, REPL silent) until the controller was rebooted; `lisp upload` now reboots by itself when the script does not answer.

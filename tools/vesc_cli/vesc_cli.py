@@ -33,9 +33,11 @@ COMM_FORWARD_CAN = 34
 COMM_PING_CAN = 62
 COMM_QMLUI_ERASE = 120
 COMM_QMLUI_WRITE = 121
+COMM_LISP_READ_CODE = 130
 COMM_LISP_WRITE_CODE = 131
 COMM_LISP_ERASE_CODE = 132
 COMM_LISP_SET_RUNNING = 133
+COMM_LISP_GET_STATS = 134
 COMM_LISP_PRINT = 135
 COMM_LISP_REPL_CMD = 138
 COMM_FILE_LIST = 140
@@ -214,6 +216,52 @@ def discover(seconds=3.0):
     return found
 
 
+def scan_subnet(port=65102, timeout=0.4):
+    """Fallback when the broadcast is blocked (e.g. by a firewall): try TCP 65102
+    on every address of the local /24 and keep those that answer as a VESC."""
+    import concurrent.futures
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        s.connect(('8.8.8.8', 80))       # no packet is sent; picks the LAN interface
+        me = s.getsockname()[0]
+    finally:
+        s.close()
+    base = me.rsplit('.', 1)[0]
+
+    def probe(ip):
+        try:
+            c = socket.create_connection((ip, port), timeout=timeout)
+        except OSError:
+            return None
+        try:
+            c.settimeout(1.0)
+            c.sendall(frame(bytes([COMM_FW_VERSION])))
+            v = Vesc(None)
+            def rd(self):
+                try:
+                    return c.recv(4096)
+                except socket.timeout:
+                    return b''
+            v.t = type('T', (), {'read': rd})()
+            p = v.recv(1.5)
+            if p and p[0] == COMM_FW_VERSION:
+                b = Buf(p[1:])
+                b.u8(); b.u8()
+                return ip, b.string()
+        except (OSError, VescError, ValueError):
+            pass
+        finally:
+            c.close()
+        return None
+
+    found = {}
+    with concurrent.futures.ThreadPoolExecutor(64) as ex:
+        for r in ex.map(probe, [f'{base}.{i}' for i in range(1, 255) if f'{base}.{i}' != me]):
+            if r:
+                found[r[0]] = (r[1], r[0], port)
+    return found
+
+
 def serial_candidates():
     try:
         from serial.tools import list_ports
@@ -344,6 +392,9 @@ def connect(args):
         tr = SerialTransport(args.serial)
     else:
         found = discover(3.0)
+        if not found:
+            print('no Wi-Fi broadcast seen, scanning the local network for port 65102...', file=sys.stderr)
+            found = scan_subnet()
         if found:
             name, ip, port = sorted(found.values())[0]
             print(f'found {name} at {ip}:{port}', file=sys.stderr)
@@ -508,6 +559,7 @@ def xml_to_values(kind, path, d):
 
 
 PROTECTED = ('foc_offsets_',)
+PROFILE = ('l_current_max_scale', 'l_current_min_scale', 'l_min_erpm', 'l_max_erpm')
 
 
 def differs(d, name, a, b):
@@ -634,7 +686,8 @@ def qcompress(data):
 def cmd_discover(args):
     found = discover(args.seconds)
     if not found:
-        print('no Express broadcast seen')
+        print('no Express broadcast seen; scanning the local network for port 65102')
+        found = scan_subnet()
     for name, ip, port in found.values():
         print(f'{name}\t{ip}:{port}')
 
@@ -762,6 +815,11 @@ def cmd_conf_set(args):
     # hardware it was measured on, and the firmware ignores it anyway unless told otherwise.
     for k in [k for k in want if k.startswith(PROTECTED)]:
         del want[k]
+    # The Dash ESC drive modes rewrite these at runtime (neutral = scale 0 and a
+    # speed limit), so the device usually shows the current mode, not the setting.
+    if args.kind == 'mcconf' and not args.include_profile:
+        for k in PROFILE:
+            want.pop(k, None)
     missing = [k for k in d.order if k not in want]
     new.update(want)
     changes = [(k, cur[k], new[k]) for k in d.order if differs(d, k, cur[k], new[k])]
@@ -812,9 +870,52 @@ def cmd_lisp(args):
         print(f'uploaded {len(data)} bytes to {cid}; running: {ok}')
         time.sleep(2.0)
         out = v.repl(cid, '(+ 1 2)', 2.0)
+        if not out.strip():
+            # Seen on the Duet (fw 7.00): after replacing a running script the
+            # evaluator can stay wedged until the controller reboots.
+            print('no REPL answer, rebooting the controller', file=sys.stderr)
+            v.send(bytes([COMM_REBOOT]), v.tgt(cid))
+            time.sleep(12.0)
+            out = v.repl(cid, '(+ 1 2)', 3.0)
         print('REPL check:', out.strip() or '(no answer)')
     elif args.action in ('start', 'stop'):
+        v.prints = []
         print('ok' if set_lisp_running(v, cid, args.action == 'start') else 'failed')
+        t_end = time.time() + args.wait
+        while time.time() < t_end:
+            p = v.recv(t_end - time.time())
+            if p is not None and p[0] == COMM_LISP_PRINT:
+                v.prints.append(p[1:].decode('latin-1'))
+        if v.prints:
+            print('\n'.join(v.prints))
+    elif args.action == 'reboot':
+        require_standstill(v, args)
+        v.send(bytes([COMM_REBOOT]), v.tgt(cid))
+        print(f'reboot sent to {cid}')
+    elif args.action == 'read':
+        data, total, off = bytearray(), None, 0
+        while total is None or off < total:
+            n = 400 if total is None else min(400, total - off)
+            b = Buf(v.request(bytes([COMM_LISP_READ_CODE]) + struct.pack('>ii', n, off), COMM_LISP_READ_CODE,
+                              v.tgt(cid), timeout=1.5, retries=3))
+            total = b.i32()
+            o = b.i32()
+            if total == 0:
+                break
+            chunk = b.take(b.left())
+            data += chunk
+            off += len(chunk)
+        open(args.file, 'wb').write(data)
+        print(f'read {len(data)} bytes of stored code to {args.file}')
+    elif args.action == 'stats':
+        b = Buf(v.request(bytes([COMM_LISP_GET_STATS, 1]), COMM_LISP_GET_STATS, v.tgt(cid), timeout=2.0))
+        print(f'cpu {b.f16(100)} %  heap {b.f16(100)} %  mem {b.f16(100)} %  stack {b.f16(100)} %')
+        print('last context result:', b.string())
+        n = 0
+        while b.left() > 0 and n < args.globals:
+            name = b.string()
+            print(f'  {name} = {b.f32auto():.4g}')
+            n += 1
     elif args.action == 'repl':
         print(v.repl(cid, args.expr, args.wait))
 
@@ -848,6 +949,13 @@ def cmd_pkg(args):
         upload_code(v, cid, lisp, COMM_LISP_ERASE_CODE, COMM_LISP_WRITE_CODE, 'lisp')
         print('running:', set_lisp_running(v, cid, True))
     print('package installed')
+
+
+def cmd_reboot(args):
+    v = connect(args)
+    require_standstill(v, args)
+    v.send(bytes([COMM_REBOOT]), v.tgt(args.id))
+    print(f'reboot sent to {args.id}')
 
 
 def main():
@@ -888,12 +996,15 @@ def main():
         w.add_argument('id', type=int)
         w.add_argument('file')
         w.add_argument('--dry-run', action='store_true')
+        w.add_argument('--include-profile', action='store_true',
+                       help='also write current scales and erpm limits (normally set by the drive modes)')
         w.set_defaults(fn=cmd_conf_set, kind=kind)
 
     sub.add_parser('backup', help='save both motor configs and the app config').set_defaults(fn=cmd_backup)
 
     s = sub.add_parser('lisp', help='upload, start, stop the Lisp script, or run REPL expressions')
-    s.add_argument('action', choices=['upload', 'start', 'stop', 'repl'])
+    s.add_argument('action', choices=['upload', 'start', 'stop', 'repl', 'stats', 'read', 'reboot'])
+    s.add_argument('--globals', type=int, default=40, help='number of global numbers to show with stats')
     s.add_argument('--id', type=int, default=48)
     s.add_argument('--file', help='script for upload')
     s.add_argument('--expr', help='expression for repl')
@@ -901,14 +1012,18 @@ def main():
     s.add_argument('--lib', default=os.path.join(HERE, 'lib'), help='local copies of pkg@ libraries')
     s.set_defaults(fn=cmd_lisp)
 
+    s = sub.add_parser('reboot', help='reboot a node (standstill only)')
+    s.add_argument('--id', type=int, default=48)
+    s.set_defaults(fn=cmd_reboot)
+
     s = sub.add_parser('pkg', help='install a .vescpkg (default target: the display)')
     s.add_argument('file')
     s.add_argument('--id', type=int)
     s.set_defaults(fn=cmd_pkg)
 
     args = ap.parse_args()
-    if args.cmd == 'lisp' and args.action == 'upload' and not args.file:
-        ap.error('lisp upload needs --file')
+    if args.cmd == 'lisp' and args.action in ('upload', 'read') and not args.file:
+        ap.error('lisp upload/read needs --file')
     if args.cmd == 'lisp' and args.action == 'repl' and not args.expr:
         ap.error('lisp repl needs --expr')
     try:
