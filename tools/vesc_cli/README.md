@@ -13,7 +13,7 @@ Motor 1 is CAN 48 and motor 2 is CAN 49 (`--esc-id`, `--m2-id`). Over Wi-Fi ever
 
 ## Running it from Claude (runner/)
 
-Claude's own shell cannot reach the home network, so `runner/vesc_runner.py` runs on the laptop (`runner/start_runner.bat`) and executes only `vesc_cli` commands dropped as JSON files into its `queue/` folder; `runner/q.sh` submits one and waits for the output.
+Claude's own shell cannot reach the home network, so `runner/vesc_runner.py` runs on the laptop (`runner/start_runner.bat`) and executes only `vesc_cli` commands dropped as JSON files into its `queue/` folder; `runner/q.sh` submits one and waits for the output, `runner/check_sync.sh` compares everything on the scooter with the repo files, `runner/fetch_repo.sh` refreshes the laptop copies from GitHub. `skill/SKILL.md` is the Claude skill describing the whole procedure.
 
 ## Commands
 
