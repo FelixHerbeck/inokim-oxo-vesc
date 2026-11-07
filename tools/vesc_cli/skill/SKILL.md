@@ -40,6 +40,7 @@ Writes (refused unless both wheels are below 100 erpm; each prints the changes, 
 
 ## Rules
 
+- **Wheels-in-the-air guardrail.** Before sending any command that makes a motor turn or pushes current through it, stop and ask the user in chat to confirm that the scooter is set up for it (rear and/or front wheel off the ground as needed, or the brake held where the procedure allows it, and nobody near the wheels), and wait for an explicit yes. This covers REPL calls such as `(therm-test)`, `(therm-cal)`, `(therm-cooldown ...)`, `set-current`, `set-rpm`, `set-duty`, `set-brake`, `conf-measure-res`/`conf-measure-ind`, motor detection, and any ABS, stick or spin test. Name the wheel(s) and what will happen (e.g. "25 A through the stationary rear motor for 0.3 s, small jerk"). One confirmation covers one command or one clearly described test sequence; ask again for anything new. No confirmation, no command, even when working unattended.
 - Before any write: `values` must show 0 erpm on both motors; say what will change; after the write run `./check_sync.sh` or the matching read-back.
 - Do not write `foc_offsets_*` (calibration) or the drive-mode runtime limits (`l_current_max_scale`, `l_current_min_scale`, `l_min_erpm`, `l_max_erpm`); the tool skips them unless `--include-profile`.
 - Temporary changes (for example auto power-off disabled: appconf `shutdown_mode` 2 instead of 7) must be noted in the repo README and restored afterwards with `appconf set 48 repo/appconf_ID48.xml`.
