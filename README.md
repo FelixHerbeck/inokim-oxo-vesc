@@ -217,3 +217,11 @@ Working: both motors, throttle, regen brake, drive modes (Dash ESC), cruise cont
 - Charge counting and regen ABS written but untested on hardware.
 - Parked alarm / immobiliser tried and removed (2026-11-04): the motors' handbrake did not hold the wheels. A mechanical lock is the better answer; an LTE tracker may come with the modem.
 - Motorcycle display view: rendered and checked in the LispBM REPL, not yet tested on the Dash 35B.
+
+## License
+
+Copyright (C) 2026 Felix Herbeck
+
+This repository is free software: you can redistribute it and/or modify it under the terms of the GNU General Public License as published by the Free Software Foundation, either version 3 of the License, or (at your option) any later version, the same license as VESC Tool and the VESC firmware. It is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See [LICENSE](LICENSE).
+
+Parts that come from elsewhere keep their own notices: the Dash ESC script base and the Dash35B package (vedderb/vesc_pkg, GPL-3.0), the parameter definitions in `tools/vesc_cli/config/` and the protocol details (VESC Tool and firmware, GPL-3.0), the Roboto fonts (Apache 2.0) and the Inter font used for the speed digits (SIL Open Font License 1.1).
