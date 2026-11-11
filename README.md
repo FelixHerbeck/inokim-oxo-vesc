@@ -5,7 +5,7 @@ Configs, LispBM script and wiring diagrams for converting an Inokim OXO scooter 
 ## Project KPIs (in priority order)
 
 1. **Don't damage the hardware.** Motors, controller, battery and BMS stay inside their limits; the motor temperature model and derating guard the motors.
-2. **Maximum possible speed on the daily climb.** No change may make the climb slower.
+2. **Maximum possible speed on the daily climb.** Changes that make the climb faster are welcome; no change may make it slower.
 3. **Maximum possible speed on a flat road.** Only as far as 1 and 2 allow (field weakening, in steps, each checked in a log).
 
 Fixed constraint: regen braking stays as it is (rear −35 A / −12 A battery, front −20 A / −6 A battery); the rider does not want it any stronger.
